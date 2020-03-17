@@ -1,0 +1,19 @@
+syntax = "proto3";
+package alitsdb_serialization;
+
+message MultifieldPoint {
+    int64               timestamp = 1;
+    string              metric    = 2;
+    map<string, string> tags = 3;
+    map<string, double> fields = 4;
+}
+
+message MputRequest {
+    repeated MultifieldPoint points = 1;
+}
+
+message MputResponse {
+
+}
+
+//protoc --gogofast_out=alitsdb_serializaition alitsdb.proto

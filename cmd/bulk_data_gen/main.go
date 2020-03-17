@@ -18,20 +18,21 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/common"
-	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/dashboard"
-	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/devops"
-	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/iot"
-	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/vehicle"
 	"log"
 	"os"
 	"runtime/pprof"
 	"strings"
 	"time"
+
+	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/common"
+	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/dashboard"
+	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/devops"
+	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/iot"
+	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/vehicle"
 )
 
 // Output data format choices:
-var formatChoices = []string{"influx-bulk", "es-bulk", "es-bulk6x", "cassandra", "mongo", "opentsdb", "bcetsdb", "bcetsdb-bulk", "timescaledb-sql", "timescaledb-copyFrom", "graphite-line", "graphite-pickle"}
+var formatChoices = []string{"influx-bulk", "es-bulk", "es-bulk6x", "cassandra", "mongo", "opentsdb", "bcetsdb", "bcetsdb-bulk", "timescaledb-sql", "timescaledb-copyFrom", "graphite-line", "graphite-pickle", "alitsdb-http", "alitsdb"}
 
 // Program option vars:
 var (
@@ -213,6 +214,10 @@ func main() {
 		serializer = common.NewSerializerTimescaleBin()
 	case "graphite-line":
 		serializer = common.NewSerializerGraphiteLine()
+	case "alitsdb-http":
+		serializer = common.NewSerializerAliTSDBHttp()
+	case "alitsdb":
+		serializer = common.NewSerializerAliTSDB()
 	default:
 		panic("unreachable")
 	}

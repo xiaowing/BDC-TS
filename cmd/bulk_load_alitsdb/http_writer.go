@@ -22,33 +22,35 @@ type LineProtocolWriter interface {
 	// Returns the latency, in nanoseconds, of executing the write against the remote server and applicable errors.
 	// Implementers must return errors returned by the underlying transport but are free to return
 	// other, context-specific errors.
-	WriteLineProtocol([]byte) (latencyNs int64, err error)
-	ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.WaitGroup, batchChan chan *bytes.Buffer, backoff time.Duration, backingOffChan chan bool)
+
+	//WriteLineProtocol([]byte) (latencyNs int64, err error)
+	ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.WaitGroup, backoff time.Duration, backingOffChan chan bool)
 }
 
 // HTTPWriterConfig is the configuration used to create an HTTPWriter.
-type HTTPWriterConfig struct {
+type WriterConfig struct {
 	// URL of the host, in form "http://example.com:8086"
 	Host string
+	Port int
 }
 
 // HTTPWriter is a Writer that writes to an OpenTSDB HTTP server.
 type HTTPWriter struct {
 	client fasthttp.Client
 
-	c   HTTPWriterConfig
+	c   WriterConfig
 	url []byte
 }
 
 // NewHTTPWriter returns a new HTTPWriter from the supplied HTTPWriterConfig.
-func NewHTTPWriter(c HTTPWriterConfig) LineProtocolWriter {
+func NewHTTPWriter(c WriterConfig) LineProtocolWriter {
 	return &HTTPWriter{
 		client: fasthttp.Client{
 			Name: "bulk_load_alitsdb",
 		},
 
 		c:   c,
-		url: []byte(c.Host + "/api/mput"),
+		url: []byte(fmt.Sprintf("http://%s:%d/api/mput", c.Host, c.Port)),
 	}
 }
 
@@ -77,7 +79,11 @@ func (w *HTTPWriter) WriteLineProtocol(body []byte) (int64, error) {
 		//if sc == 500 && backpressurePred(resp.Body()) {
 		//	err = BackoffError
 		if sc != fasthttp.StatusNoContent && sc != fasthttp.StatusOK {
-			err = fmt.Errorf("Invalid write response (status %d): %s", sc, resp.Body())
+			if sc == 500 && backpressurePred(resp.Body()) {
+				err = BackoffError
+			} else {
+				err = fmt.Errorf("Invalid write response (status %d): %s", sc, resp.Body())
+			}
 		}
 	}
 
@@ -88,7 +94,7 @@ func (w *HTTPWriter) WriteLineProtocol(body []byte) (int64, error) {
 }
 
 // ProcessBatches read the data from input stream and write by batch
-func (w *HTTPWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.WaitGroup, batchChan chan *bytes.Buffer, backoff time.Duration, backingOffChan chan bool) {
+func (w *HTTPWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.WaitGroup, backoff time.Duration, backingOffChan chan bool) {
 	for batch := range batchChan {
 		// Write the batch: try until backoff is not needed.
 		if doLoad {
@@ -107,7 +113,6 @@ func (w *HTTPWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wa
 				log.Fatalf("Error writing: %s\n", err.Error())
 			}
 		}
-		//fmt.Println(string(batch.Bytes()))
 
 		// Return the batch buffer to the pool.
 		batch.Reset()

@@ -27,20 +27,22 @@ func NewSerializerAliTSDB() *SerializerAliTSDB {
 	return &SerializerAliTSDB{}
 }
 
-// This function writes JSON lines that looks like:
+// MultiFieldsJSONPoint defines the data structure of AliTSDB mput interface
+type MultiFieldsJSONPoint struct {
+	Metric    string             `json:"metric"`
+	Timestamp int64              `json:"timestamp"`
+	Tags      map[string]string  `json:"tags"`
+	Fields    map[string]float64 `json:"fields"`
+}
+
+// SerializePoint writes JSON lines that looks like:
 // { <metric>, <timestamp>, <fields>, <tags> }
 //
 func (m *SerializerAliTSDBHttp) SerializePoint(w io.Writer, p *Point) (err error) {
-	type wirePoint struct {
-		Metric    string             `json:"metric"`
-		Timestamp int64              `json:"timestamp"`
-		Tags      map[string]string  `json:"tags"`
-		Fields    map[string]float64 `json:"fields"`
-	}
 
 	encoder := json.NewEncoder(w)
 
-	wp := wirePoint{}
+	wp := MultiFieldsJSONPoint{}
 	// Timestamps in AliTSDB must be millisecond precision:
 	wp.Timestamp = p.Timestamp.UTC().UnixNano() / 1e6
 	// sanity check

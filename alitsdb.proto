@@ -1,5 +1,10 @@
 syntax = "proto3";
-package alitsdb_serialization;
+package com.alibaba.tsdb.service.api;
+
+service MultiFieldsPutService {
+    rpc mput (MputRequest) returns (MputResponse) {
+    }
+}
 
 message MultifieldPoint {
     int64               timestamp = 1;
@@ -13,7 +18,12 @@ message MputRequest {
 }
 
 message MputResponse {
-
+    bool ret = 1;
 }
 
-//protoc --gogofast_out=alitsdb_serializaition alitsdb.proto
+// protoc --gofast_out=plugins=grpc:alitsdb_serializaition alitsdb.proto
+//
+// plugin installation:
+// - protoc-gen-gofast: go get github.com/gogo/protobuf/protoc-gen-gofast
+// - grpc:              go get google.golang.org/grpc
+//                      or, execute `git clone https://github.com/grpc/grpc-go.git $GOPATH/src/google.golang.org/grpc` and install it manually

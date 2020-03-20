@@ -306,13 +306,14 @@ func scanJSONfileForHTTP(linesPerBatch int) (int64, int64) {
 // When the requested number of lines per batch is met, send a batch over batchChan for the workers to write.
 func scanJSONfileForGRPC(linesPerBatch int) (int64, int64) {
 	buf := bufPool.Get().(*bytes.Buffer)
-	zw := gzip.NewWriter(buf)
+	zw := bufio.NewWriterSize(buf, 4*1024*1024)
 
 	var n int
 	var itemsRead int64
 
 	zw.Write(openbracket)
 	zw.Write(newline)
+	zw.Flush()
 
 	scanner := bufio.NewScanner(bufio.NewReaderSize(os.Stdin, 4*1024*1024))
 	for scanner.Scan() {
@@ -320,6 +321,7 @@ func scanJSONfileForGRPC(linesPerBatch int) (int64, int64) {
 		if n > 0 {
 			zw.Write(commaspace)
 			zw.Write(newline)
+			zw.Flush()
 		}
 
 		zw.Write(scanner.Bytes())
@@ -328,7 +330,7 @@ func scanJSONfileForGRPC(linesPerBatch int) (int64, int64) {
 		if n >= linesPerBatch {
 			zw.Write(newline)
 			zw.Write(closebracket)
-			zw.Close()
+			zw.Flush()
 
 			var points = []common.MultiFieldsJSONPoint{}
 			var inputPoints = []*alitsdb_serialization.MultifieldPoint{}
@@ -348,10 +350,16 @@ func scanJSONfileForGRPC(linesPerBatch int) (int64, int64) {
 
 			batchPointsChan <- inputPoints
 
+			// release buf because it would be reused
+			buf.Reset()
+			bufPool.Put(buf)
+
 			buf = bufPool.Get().(*bytes.Buffer)
-			zw = gzip.NewWriter(buf)
+
+			zw := bufio.NewWriterSize(buf, 4*1024*1024)
 			zw.Write(openbracket)
 			zw.Write(newline)
+			zw.Flush()
 			n = 0
 		}
 	}
@@ -364,7 +372,7 @@ func scanJSONfileForGRPC(linesPerBatch int) (int64, int64) {
 	if n > 0 {
 		zw.Write(newline)
 		zw.Write(closebracket)
-		zw.Close()
+		zw.Flush()
 
 		var points = []*common.MultiFieldsJSONPoint{}
 		var inputPoints = []*alitsdb_serialization.MultifieldPoint{}
@@ -383,6 +391,10 @@ func scanJSONfileForGRPC(linesPerBatch int) (int64, int64) {
 		}
 
 		batchPointsChan <- inputPoints
+
+		// release buf because it would be reused
+		buf.Reset()
+		bufPool.Put(buf)
 	}
 
 	// Closing inputDone signals to the application that we've read everything and can now shut down.

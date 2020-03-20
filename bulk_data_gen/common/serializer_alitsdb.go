@@ -1,6 +1,7 @@
 package common
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,12 @@ import (
 
 //DateTimeStdFormat the standard string format for date time
 const DateTimeStdFormat = "2006-01-02 15:04:05.000"
+
+//SerieskeyDelimeter is the delimeter of series key
+const SerieskeyDelimeter = ','
+
+//KeyValuePairDelimeter is the delimeter of key value
+const KeyValuePairDelimeter = '='
 
 type SerializerAliTSDBHttp struct {
 }
@@ -95,8 +102,6 @@ func (s *SerializerAliTSDBHttp) SerializeSize(w io.Writer, points int64, values 
 
 func (m *SerializerAliTSDB) SerializePoint(w io.Writer, p *Point) (err error) {
 	var wp alitsdb_serialization.MultifieldPoint
-	// metric
-	wp.Metric = string(p.MeasurementName)
 
 	// Timestamps in AliTSDB must be millisecond precision:
 	wp.Timestamp = p.Timestamp.UTC().UnixNano() / 1e6
@@ -108,14 +113,17 @@ func (m *SerializerAliTSDB) SerializePoint(w io.Writer, p *Point) (err error) {
 		}
 	}
 
-	// tags allocation
-	wp.Tags = make(map[string]string, len(p.TagKeys))
+	// series key allocation
+	var serieskeyBuf bytes.Buffer
+	serieskeyBuf.Write(p.MeasurementName)
 	for i := 0; i < len(p.TagKeys); i++ {
-		// so many allocs..
-		key := string(p.TagKeys[i])
-		val := string(p.TagValues[i])
-		wp.Tags[key] = val
+		// append the ",""
+		serieskeyBuf.WriteByte(byte(SerieskeyDelimeter))
+		serieskeyBuf.Write(p.TagKeys[i])
+		serieskeyBuf.WriteByte(byte(KeyValuePairDelimeter))
+		serieskeyBuf.Write(p.TagValues[i])
 	}
+	wp.Serieskey = serieskeyBuf.String()
 
 	// fields allocation
 	wp.Fields = make(map[string]float64, len(p.FieldKeys))

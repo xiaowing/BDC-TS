@@ -8,12 +8,12 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +36,7 @@ var (
 	daemonUrls     []string
 	workers        int
 	batchSize      int
+	coresNum       int
 	backoff        time.Duration
 	doLoad         bool
 	memprofile     bool
@@ -78,6 +79,7 @@ func init() {
 	flag.StringVar(&useCase, "use-case", common.UseCaseChoices[3], fmt.Sprintf("Use case to model. (choices: %s)", strings.Join(common.UseCaseChoices, ", ")))
 	flag.IntVar(&batchSize, "batch-size", 1000, "Batch size (input lines).")
 	flag.IntVar(&workers, "workers", 1, "Number of parallel requests to make.")
+	flag.IntVar(&coresNum, "cores", 16, "Number of cpu cores.")
 	//flag.DurationVar(&backoff, "backoff", time.Second, "Time to sleep between requests when server indicates backpressure is needed.")
 	flag.BoolVar(&jsonFormat, "json-format", true, "If the input format is JSON or BINARY.")
 	flag.BoolVar(&doLoad, "do-load", true, "Whether to write data. Set this flag to false to check input read speed.")
@@ -89,6 +91,12 @@ func init() {
 	flag.StringVar(&reportPassword, "report-password", "", "User password for Host to send result metrics")
 	flag.StringVar(&reportTagsCSV, "report-tags", "", "Comma separated k:v tags to send  alongside result metrics")
 	flag.Parse()
+
+	// set the max cores number
+	if coresNum <= 0 {
+		log.Fatalf("impossible cores number: %d", coresNum)
+	}
+	runtime.GOMAXPROCS(coresNum)
 
 	daemonUrls = strings.Split(hosts, ",")
 	if len(daemonUrls) == 0 {
@@ -196,11 +204,12 @@ func main() {
 		if viaHTTP {
 			itemsRead, valuesRead = scanJSONfileForHTTP(batchSize)
 		} else {
-			itemsRead, valuesRead = scanJSONfileForGRPC(batchSize)
+			//itemsRead, valuesRead = scanJSONfileForGRPC(batchSize)
+			log.Fatalln("not support JSON format when using RPC.")
 		}
 	} else {
 		if viaHTTP {
-			log.Fatalln("not support JSON format when using RPC.")
+			log.Fatalln("not support Binary format when using HTTP.")
 		} else {
 			itemsRead, valuesRead = scanBinaryfile(batchSize)
 		}
@@ -304,6 +313,7 @@ func scanJSONfileForHTTP(linesPerBatch int) (int64, int64) {
 
 // scanJSONfileForGRPC reads one line at a time from stdin.
 // When the requested number of lines per batch is met, send a batch over batchChan for the workers to write.
+/**
 func scanJSONfileForGRPC(linesPerBatch int) (int64, int64) {
 	buf := bufPool.Get().(*bytes.Buffer)
 	zw := bufio.NewWriterSize(buf, 4*1024*1024)
@@ -402,6 +412,7 @@ func scanJSONfileForGRPC(linesPerBatch int) (int64, int64) {
 
 	return itemsRead, (itemsRead * int64(FieldsNum))
 }
+**/
 
 // scan reads one line at a time from stdin.
 // When the requested number of lines per batch is met, send a batch over batchChan for the workers to write.

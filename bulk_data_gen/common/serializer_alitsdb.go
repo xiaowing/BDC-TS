@@ -7,8 +7,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sort"
+	"strings"
 
 	alitsdb_serialization "github.com/caict-benchmark/BDC-TS/alitsdb_serializaition"
+	cmap "github.com/orcaman/concurrent-map"
+)
+
+var (
+	sortedTagkeysCache = cmap.New()
 )
 
 //DateTimeStdFormat the standard string format for date time
@@ -19,6 +26,38 @@ const SerieskeyDelimeter = ','
 
 //KeyValuePairDelimeter is the delimeter of key value
 const KeyValuePairDelimeter = '='
+
+//SortedTagKeys saves the sorted tagkeys (alphabet order) and an array with original key indexes in the same order of sorted tagkeys
+type SortedTagKeys struct {
+	sort.StringSlice
+	orgIndexs []int
+}
+
+func (stk *SortedTagKeys) Len() int {
+	return stk.StringSlice.Len()
+}
+
+func (stk *SortedTagKeys) Swap(leftidx, rightidx int) {
+	stk.StringSlice.Swap(leftidx, rightidx)
+	stk.orgIndexs[leftidx], stk.orgIndexs[rightidx] = stk.orgIndexs[rightidx], stk.orgIndexs[leftidx]
+}
+
+func (stk *SortedTagKeys) Less(leftidx, rightidx int) bool {
+	return (strings.Compare(stk.StringSlice[leftidx], stk.StringSlice[rightidx]) < 0)
+}
+
+func NewSortedTagKeys(tagkeys [][]byte) *SortedTagKeys {
+	tagKeyStrings := make([]string, len(tagkeys))
+	for i, bytes := range tagkeys {
+		tagKeyStrings[i] = string(bytes)
+	}
+	ret := &SortedTagKeys{StringSlice: sort.StringSlice(tagKeyStrings), orgIndexs: make([]int, len(tagkeys))}
+	for i := range ret.orgIndexs {
+		ret.orgIndexs[i] = i // original index
+	}
+	sort.Sort(ret)
+	return ret
+}
 
 type SerializerAliTSDBHttp struct {
 }
@@ -114,14 +153,30 @@ func (m *SerializerAliTSDB) SerializePoint(w io.Writer, p *Point) (err error) {
 	}
 
 	// series key allocation
+	var sortedKeys *SortedTagKeys
+	if sortedTagkeysCache.Has(string(p.MeasurementName)) {
+		tmp, ok := sortedTagkeysCache.Get(string(p.MeasurementName))
+		if !ok {
+			log.Fatalf("measurement \"%s\" lost in the concurrent access\n", string(p.MeasurementName))
+		}
+
+		sortedKeys, ok = tmp.(*SortedTagKeys)
+		if !ok {
+			log.Fatalf("the value retrieved from sortedTagkeysCache is not the expected type")
+		}
+	} else {
+		sortedKeys = NewSortedTagKeys(p.TagKeys)
+		sortedTagkeysCache.SetIfAbsent(string(p.MeasurementName), sortedKeys)
+	}
+
 	var serieskeyBuf bytes.Buffer
 	serieskeyBuf.Write(p.MeasurementName)
-	for i := 0; i < len(p.TagKeys); i++ {
+	for i := 0; i < len(sortedKeys.StringSlice); i++ {
 		// append the ",""
 		serieskeyBuf.WriteByte(byte(SerieskeyDelimeter))
-		serieskeyBuf.Write(p.TagKeys[i])
+		serieskeyBuf.WriteString(sortedKeys.StringSlice[i])
 		serieskeyBuf.WriteByte(byte(KeyValuePairDelimeter))
-		serieskeyBuf.Write(p.TagValues[i])
+		serieskeyBuf.Write(p.TagValues[sortedKeys.orgIndexs[i]])
 	}
 	wp.Serieskey = serieskeyBuf.String()
 

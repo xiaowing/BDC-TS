@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -36,10 +37,11 @@ var (
 	daemonUrls     []string
 	workers        int
 	batchSize      int
-	coresNum       int
 	backoff        time.Duration
 	doLoad         bool
 	memprofile     bool
+	debug          bool
+	cpuProfile     string
 	viaHTTP        bool
 	jsonFormat     bool
 	reportDatabase string
@@ -57,6 +59,8 @@ var (
 	batchChan chan *bytes.Buffer
 	// channel for RPC write
 	batchPointsChan chan []*alitsdb_serialization.MultifieldPoint
+
+	monitorChan chan bool
 
 	inputDone      chan struct{}
 	workersGroup   sync.WaitGroup
@@ -79,24 +83,19 @@ func init() {
 	flag.StringVar(&useCase, "use-case", common.UseCaseChoices[3], fmt.Sprintf("Use case to model. (choices: %s)", strings.Join(common.UseCaseChoices, ", ")))
 	flag.IntVar(&batchSize, "batch-size", 1000, "Batch size (input lines).")
 	flag.IntVar(&workers, "workers", 1, "Number of parallel requests to make.")
-	flag.IntVar(&coresNum, "cores", 16, "Number of cpu cores.")
 	//flag.DurationVar(&backoff, "backoff", time.Second, "Time to sleep between requests when server indicates backpressure is needed.")
 	flag.BoolVar(&jsonFormat, "json-format", true, "If the input format is JSON or BINARY.")
 	flag.BoolVar(&doLoad, "do-load", true, "Whether to write data. Set this flag to false to check input read speed.")
 	flag.BoolVar(&memprofile, "memprofile", false, "Whether to write a memprofile (file automatically determined).")
+	flag.StringVar(&cpuProfile, "cpu-profile", "", "Write CPU profile to `file`")
 	flag.BoolVar(&viaHTTP, "viahttp", true, "Whether to write data via the HTTP protocol and whether to load data according to the JSON format")
 	flag.StringVar(&reportDatabase, "report-database", "database_benchmarks", "Database name where to store result metrics")
 	flag.StringVar(&reportHost, "report-host", "", "Host to send result metrics")
 	flag.StringVar(&reportUser, "report-user", "", "User for host to send result metrics")
 	flag.StringVar(&reportPassword, "report-password", "", "User password for Host to send result metrics")
 	flag.StringVar(&reportTagsCSV, "report-tags", "", "Comma separated k:v tags to send  alongside result metrics")
+	flag.BoolVar(&debug, "debug", false, "whether to print some debug information")
 	flag.Parse()
-
-	// set the max cores number
-	if coresNum <= 0 {
-		log.Fatalf("impossible cores number: %d", coresNum)
-	}
-	runtime.GOMAXPROCS(coresNum)
 
 	daemonUrls = strings.Split(hosts, ",")
 	if len(daemonUrls) == 0 {
@@ -141,6 +140,17 @@ func init() {
 }
 
 func main() {
+	if cpuProfile != "" {
+		f, err := os.Create(cpuProfile)
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
+
 	if memprofile {
 		p := profile.Start(profile.MemProfile)
 		defer p.Stop()
@@ -163,8 +173,10 @@ func main() {
 		},
 	}
 
-	batchChan = make(chan *bytes.Buffer, workers)
-	batchPointsChan = make(chan []*alitsdb_serialization.MultifieldPoint, workers)
+	batchChan = make(chan *bytes.Buffer, workers*batchSize)
+	batchPointsChan = make(chan []*alitsdb_serialization.MultifieldPoint, workers*batchSize)
+	monitorChan = make(chan bool)
+
 	inputDone = make(chan struct{})
 
 	backingOffChan = make(chan bool, 100)
@@ -188,6 +200,11 @@ func main() {
 	}
 
 	go processBackoffMessages()
+
+	if debug {
+		// monitoring the channel
+		go channelMonitor()
+	}
 
 	start := time.Now()
 	var itemsRead, valuesRead int64
@@ -221,14 +238,24 @@ func main() {
 
 	workersGroup.Wait()
 
+	if debug {
+		// ask the channel monitor routine to stop
+		monitorChan <- true
+	}
+
 	close(backingOffChan)
 	<-backingOffDone
 
+	if debug {
+		log.Println("monitor goroutine killed")
+	}
+
 	end := time.Now()
 	took := end.Sub(start)
-	rate := float64(valuesRead) / float64(took.Seconds())
+	itemrate := float64(itemsRead) / float64(took.Seconds())
+	valuerate := float64(valuesRead) / float64(took.Seconds())
 
-	fmt.Printf("loaded %d items and %d values in %fsec with %d workers (mean values rate %f/sec)\n", itemsRead, valuesRead, took.Seconds(), workers, rate)
+	fmt.Printf("loaded %d items and %d values in %fsec with %d workers (mean point rate %f items/sec, value rate %f/s)\n", itemsRead, valuesRead, took.Seconds(), workers, itemrate, valuerate)
 
 	if reportHost != "" {
 		reportParams := &report.LoadReportParams{
@@ -247,7 +274,7 @@ func main() {
 			IsGzip:    true,
 			BatchSize: batchSize,
 		}
-		err := report.ReportLoadResult(reportParams, itemsRead, rate, -1, took)
+		err := report.ReportLoadResult(reportParams, itemsRead, valuerate, -1, took)
 
 		if err != nil {
 			log.Fatal(err)
@@ -310,109 +337,6 @@ func scanJSONfileForHTTP(linesPerBatch int) (int64, int64) {
 
 	return itemsRead, (itemsRead * int64(FieldsNum))
 }
-
-// scanJSONfileForGRPC reads one line at a time from stdin.
-// When the requested number of lines per batch is met, send a batch over batchChan for the workers to write.
-/**
-func scanJSONfileForGRPC(linesPerBatch int) (int64, int64) {
-	buf := bufPool.Get().(*bytes.Buffer)
-	zw := bufio.NewWriterSize(buf, 4*1024*1024)
-
-	var n int
-	var itemsRead int64
-
-	zw.Write(openbracket)
-	zw.Write(newline)
-	zw.Flush()
-
-	scanner := bufio.NewScanner(bufio.NewReaderSize(os.Stdin, 4*1024*1024))
-	for scanner.Scan() {
-		itemsRead++
-		if n > 0 {
-			zw.Write(commaspace)
-			zw.Write(newline)
-			zw.Flush()
-		}
-
-		zw.Write(scanner.Bytes())
-
-		n++
-		if n >= linesPerBatch {
-			zw.Write(newline)
-			zw.Write(closebracket)
-			zw.Flush()
-
-			var points = []common.MultiFieldsJSONPoint{}
-			var inputPoints = []*alitsdb_serialization.MultifieldPoint{}
-			err := json.Unmarshal(buf.Bytes(), &points)
-			if err != nil {
-				log.Fatalf("Error unmarshaling points: %s", err.Error())
-			}
-
-			for _, p := range points {
-				inputPoints = append(inputPoints, &alitsdb_serialization.MultifieldPoint{
-					Metric:    p.Metric,
-					Timestamp: p.Timestamp,
-					Tags:      p.Tags,
-					Fields:    p.Fields,
-				})
-			}
-
-			batchPointsChan <- inputPoints
-
-			// release buf because it would be reused
-			buf.Reset()
-			bufPool.Put(buf)
-
-			buf = bufPool.Get().(*bytes.Buffer)
-
-			zw := bufio.NewWriterSize(buf, 4*1024*1024)
-			zw.Write(openbracket)
-			zw.Write(newline)
-			zw.Flush()
-			n = 0
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Fatalf("Error reading input: %s", err.Error())
-	}
-
-	// Finished reading input, make sure last batch goes out.
-	if n > 0 {
-		zw.Write(newline)
-		zw.Write(closebracket)
-		zw.Flush()
-
-		var points = []*common.MultiFieldsJSONPoint{}
-		var inputPoints = []*alitsdb_serialization.MultifieldPoint{}
-		err := json.Unmarshal(buf.Bytes(), &points)
-		if err != nil {
-			log.Fatalf("Error unmarshaling points: %s", err.Error())
-		}
-
-		for _, p := range points {
-			inputPoints = append(inputPoints, &alitsdb_serialization.MultifieldPoint{
-				Metric:    p.Metric,
-				Timestamp: p.Timestamp,
-				Tags:      p.Tags,
-				Fields:    p.Fields,
-			})
-		}
-
-		batchPointsChan <- inputPoints
-
-		// release buf because it would be reused
-		buf.Reset()
-		bufPool.Put(buf)
-	}
-
-	// Closing inputDone signals to the application that we've read everything and can now shut down.
-	close(inputDone)
-
-	return itemsRead, (itemsRead * int64(FieldsNum))
-}
-**/
 
 // scan reads one line at a time from stdin.
 // When the requested number of lines per batch is met, send a batch over batchChan for the workers to write.
@@ -540,6 +464,26 @@ func processBackoffMessages() {
 	}
 	fmt.Printf("backoffs took a total of %fsec of runtime\n", totalBackoffSecs)
 	backingOffDone <- struct{}{}
+}
+
+func channelMonitor() {
+	for {
+		select {
+		case <-monitorChan:
+			log.Printf("killing monitor routine...\n")
+			return
+		default:
+			if viaHTTP {
+				log.Printf("batchChan stats. Capacity: %d, Accumulation: %d  count of goroutines: %d\n",
+					cap(batchChan), len(batchChan), runtime.NumGoroutine())
+			} else {
+				log.Printf("batchChan stats. Capacity: %d, Accumulation: %d  count of goroutines: %d\n",
+					cap(batchPointsChan), len(batchPointsChan), runtime.NumGoroutine())
+			}
+
+			time.Sleep(10 * time.Second)
+		}
+	}
 }
 
 // TODO(rw): listDatabases lists the existing data in OpenTSDB.

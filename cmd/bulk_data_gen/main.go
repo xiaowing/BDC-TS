@@ -8,6 +8,7 @@
 // OpenTSDB bulk HTTP format
 // TimescaleDB SQL INSERT and binary COPY FROM
 // Graphite plaintext format
+// Alitsdb HTTP and RPC format
 //
 // Supported use cases:
 // Devops: scale_var is the number of hosts to simulate, with log messages

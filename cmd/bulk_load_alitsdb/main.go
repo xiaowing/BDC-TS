@@ -1,5 +1,3 @@
-// bulk_load_opentsdb loads an OpenTSDB daemon with data from stdin.
-//
 // The caller is responsible for assuring that the database is empty before
 // bulk load.
 package main
@@ -255,7 +253,9 @@ func main() {
 	itemrate := float64(itemsRead) / float64(took.Seconds())
 	valuerate := float64(valuesRead) / float64(took.Seconds())
 
-	fmt.Printf("loaded %d items and %d values in %fsec with %d workers (mean point rate %f items/sec, value rate %f/s)\n", itemsRead, valuesRead, took.Seconds(), workers, itemrate, valuerate)
+	// the output start time and end time are all in seconds
+	fmt.Printf("loaded %d items and %d values in %fsec (start %d, end %d) with %d workers (mean point rate %f items/sec, value rate %f/s)\n",
+		itemsRead, valuesRead, took.Seconds(), start.Unix(), end.Unix(), workers, itemrate, valuerate)
 
 	if reportHost != "" {
 		reportParams := &report.LoadReportParams{
@@ -414,37 +414,6 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 
 	return itemsRead, (itemsRead * int64(FieldsNum))
 }
-
-// processBatches reads byte buffers from batchChan and writes them to the target server, while tracking stats on the write.
-/**
-func processBatches(w LineProtocolWriter) {
-	for batch := range batchChan {
-		// Write the batch: try until backoff is not needed.
-		if doLoad {
-			var err error
-			for {
-				_, err = w.WriteLineProtocol(batch.Bytes())
-				if err == BackoffError {
-					backingOffChan <- true
-					time.Sleep(backoff)
-				} else {
-					backingOffChan <- false
-					break
-				}
-			}
-			if err != nil {
-				log.Fatalf("Error writing: %s\n", err.Error())
-			}
-		}
-		//fmt.Println(string(batch.Bytes()))
-
-		// Return the batch buffer to the pool.
-		batch.Reset()
-		bufPool.Put(batch)
-	}
-	workersGroup.Done()
-}
-*/
 
 func processBackoffMessages() {
 	var totalBackoffSecs float64

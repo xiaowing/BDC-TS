@@ -16,6 +16,9 @@ import (
 	"google.golang.org/grpc"
 )
 
+// MputAttemptsLimit indicates the max attemps which the mput can tries
+const MputAttemptsLimit = 4
+
 var (
 	fieldNameCache = cmap.New()
 )
@@ -37,14 +40,33 @@ func (w *RpcWriter) WriteLineProtocol(points []*alitsdb_serialization.Multifield
 	req.Points, req.Fnames = convertMultifieldPoints2MputPoints(points)
 
 	if doLoad {
-		//TODO: send the write request
-		resp, err := w.client.Mput(context.Background(), req)
-		if err == nil {
-			if !resp.Ret {
-				log.Println("[WARN] mput request succeeded but retval is false")
+		retries := MputAttemptsLimit
+
+		for retries > 0 {
+			//TODO: send the write request
+			resp, err := w.client.Mput(context.Background(), req)
+			if err == nil {
+				if !resp.Ret {
+					log.Println("[WARN] mput request succeeded but retval is false")
+				}
+				// request succeeded so no need to retry
+				retries = 0
+			} else {
+				log.Printf("Error request mput interface: %s\n", err.Error())
+				retries--
+
+				// wait a while
+				time.Sleep(time.Duration((MputAttemptsLimit-retries)*5) * time.Second)
+				// then start to retry
+				w.conn.Close()
+
+				conn, err := grpc.Dial(w.url, grpc.WithInsecure())
+				if err != nil {
+					log.Printf("Error connecting: %s\n", err.Error())
+				}
+				w.conn = conn
+				w.client = alitsdb_serialization.NewMultiFieldsPutServiceClient(w.conn)
 			}
-		} else {
-			log.Printf("Error request mput interface: %s\n", err.Error())
 		}
 	}
 

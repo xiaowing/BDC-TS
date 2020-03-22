@@ -4,12 +4,20 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
 	alitsdb_serialization "github.com/caict-benchmark/BDC-TS/alitsdb_serializaition"
+	cmap "github.com/orcaman/concurrent-map"
+
+	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/common"
 
 	"google.golang.org/grpc"
+)
+
+var (
+	fieldNameCache = cmap.New()
 )
 
 type RpcWriter struct {
@@ -26,16 +34,18 @@ func (w *RpcWriter) WriteLineProtocol(points []*alitsdb_serialization.Multifield
 
 	//TODO: build the request
 	req := new(alitsdb_serialization.MputRequest)
-	req.Points = points
+	req.Points, req.Fnames = convertMultifieldPoints2MputPoints(points)
 
-	//TODO: send the write request
-	resp, err := w.client.Mput(context.Background(), req)
-	if err == nil {
-		if !resp.Ret {
-			log.Println("[WARN] mput request succeeded but retval is false")
+	if doLoad {
+		//TODO: send the write request
+		resp, err := w.client.Mput(context.Background(), req)
+		if err == nil {
+			if !resp.Ret {
+				log.Println("[WARN] mput request succeeded but retval is false")
+			}
+		} else {
+			log.Printf("Error request mput interface: %s\n", err.Error())
 		}
-	} else {
-		log.Printf("Error request mput interface: %s\n", err.Error())
 	}
 
 	lat := time.Since(start).Nanoseconds()
@@ -70,18 +80,92 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 	defer w.close()
 
 	for batch := range batchPointsChan {
-		if doLoad {
-			var err error
-			for {
-				_, err = w.WriteLineProtocol(batch)
-				backingOffChan <- false
-				break
-			}
-			if err != nil {
-				log.Fatalf("Error writing: %s\n", err.Error())
-			}
+		var err error
+		for {
+			_, err = w.WriteLineProtocol(batch)
+			backingOffChan <- false
+			break
+		}
+		if err != nil {
+			log.Fatalf("Error writing: %s\n", err.Error())
 		}
 	}
 
 	wg.Done()
+}
+
+func convertMultifieldPoints2MputPoints(mfps []*alitsdb_serialization.MultifieldPoint) ([]*alitsdb_serialization.MputPoint, []string) {
+	var batchMeticNname, metric string
+	mputPoints := make([]*alitsdb_serialization.MputPoint, 0, len(mfps))
+	var fieldNames []string
+
+	for idx, p := range mfps {
+		metric = getMetric(p)
+		mputPoint := &alitsdb_serialization.MputPoint{
+			Timestamp: p.GetTimestamp(),
+			Serieskey: p.GetSerieskey(),
+			Fvalues:   make([]float64, 0, len(p.GetFields())),
+		}
+
+		// try to get the sorted fieldname list
+		if idx == 0 {
+			batchMeticNname = metric
+
+			if fieldNameCache.Has(metric) {
+				tmp, ok := fieldNameCache.Get(metric)
+				if !ok {
+					log.Fatalf("metric %s lost in the concurrent operations\n", metric)
+				}
+
+				fieldNames, ok = tmp.([]string)
+				if !ok {
+					log.Fatalf("incorrect field name type\n")
+				}
+			} else {
+				fieldNames = make([]string, 0, len(p.GetFields()))
+
+				for fieldName := range p.GetFields() {
+					fieldNames = append(fieldNames, fieldName)
+				}
+
+				fieldNameCache.SetIfAbsent(metric, fieldNames)
+			}
+		} else {
+			if strings.Compare(batchMeticNname, metric) != 0 {
+				log.Fatalf("there is a different metric \"%s\"within the current batch. \"%s\" expected", metric, batchMeticNname)
+			}
+
+			tmp, ok := fieldNameCache.Get(metric)
+			if !ok {
+				log.Fatalf("metric %s lost in the concurrent operations\n", metric)
+			}
+
+			fieldNames, ok = tmp.([]string)
+			if !ok {
+				log.Fatalf("incorrect field name type\n")
+			}
+		}
+
+		// map cannot garantee the order, so we have to set the value like this
+		for _, fname := range fieldNames {
+			mputPoint.Fvalues = append(mputPoint.Fvalues, p.Fields[fname])
+		}
+
+		mputPoints = append(mputPoints, mputPoint)
+	}
+
+	return mputPoints, fieldNames
+}
+
+func getMetric(mp *alitsdb_serialization.MultifieldPoint) string {
+	firstDeli := strings.IndexByte(mp.GetSerieskey(), byte(common.SerieskeyDelimeter))
+	var metric string
+	if firstDeli < 0 {
+		//not found
+		metric = mp.Serieskey
+	} else {
+		metric = mp.Serieskey[:firstDeli]
+	}
+
+	return metric
 }

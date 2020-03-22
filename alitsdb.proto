@@ -6,14 +6,23 @@ service MultiFieldsPutService {
     }
 }
 
+// for data generation
 message MultifieldPoint {
     int64               timestamp = 1;
     string              serieskey = 2;
     map<string, double> fields = 3;
 }
 
+// for mput request
+message MputPoint {
+    int64               timestamp = 1;
+    string              serieskey = 2;
+    repeated double     fvalues = 3;
+}
+
 message MputRequest {
-    repeated MultifieldPoint points = 1;
+    repeated string    fnames = 1;
+    repeated MputPoint points = 2;
 }
 
 message MputResponse {

@@ -226,11 +226,22 @@ func main() {
 	var currentInterleavedGroup uint = 0
 
 	t := time.Now()
-	point := common.MakeUsablePoint()
 	n := int64(0)
+	last := time.Now()
 	for !sim.Finished() {
+		point := common.MakeUsablePoint()
 		sim.Next(point)
 		n++
+
+		if n % 10000 == 0 {
+			now := time.Now()
+			dur := now.Sub(last).Milliseconds()
+			remain := sim.Total() - sim.SeenPoints()
+			fmt.Fprintf(os.Stderr, "%d/%d %d %dms remain_time: %ds\n ",
+				n, sim.Total(), remain, dur, dur * remain / 10000 / 1000)
+			last = now
+		}
+
 		// in the default case this is always true
 		if currentInterleavedGroup == interleavedGenerationGroupID {
 			//println("printing")
@@ -240,7 +251,6 @@ func main() {
 			}
 
 		}
-		point.Reset()
 
 		currentInterleavedGroup++
 		if currentInterleavedGroup == interleavedGenerationGroups {

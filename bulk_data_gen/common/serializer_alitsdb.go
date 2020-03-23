@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	alitsdb_serialization "github.com/caict-benchmark/BDC-TS/alitsdb_serializaition"
 	cmap "github.com/orcaman/concurrent-map"
@@ -63,6 +65,10 @@ type SerializerAliTSDBHttp struct {
 }
 
 type SerializerAliTSDB struct {
+	pChan chan *task
+	lock sync.Mutex
+	wg sync.WaitGroup
+	fields bool
 }
 
 func NewSerializerAliTSDBHttp() *SerializerAliTSDBHttp {
@@ -70,7 +76,13 @@ func NewSerializerAliTSDBHttp() *SerializerAliTSDBHttp {
 }
 
 func NewSerializerAliTSDB() *SerializerAliTSDB {
-	return &SerializerAliTSDB{}
+	serializerAliTSDB := &SerializerAliTSDB{}
+
+	serializerAliTSDB.start()
+	serializerAliTSDB.pChan = make(chan *task, 1000)
+	serializerAliTSDB.fields = false
+
+	return serializerAliTSDB
 }
 
 // MultiFieldsJSONPoint defines the data structure of AliTSDB mput interface
@@ -139,8 +151,108 @@ func (s *SerializerAliTSDBHttp) SerializeSize(w io.Writer, points int64, values 
 	return nil
 }
 
-func (m *SerializerAliTSDB) SerializePoint(w io.Writer, p *Point) (err error) {
-	var wp alitsdb_serialization.MultifieldPoint
+func (m *SerializerAliTSDB) start() {
+	num := runtime.NumCPU()
+	for i := 0; i < num; i++ {
+		go m.handlePoint()
+	}
+}
+
+type task struct {
+	point *Point
+	w io.Writer
+}
+
+func (m *SerializerAliTSDB) handleTask(w io.Writer, p *Point) {
+	defer m.wg.Done()
+	if !m.fields {
+		m.lock.Lock()
+		if !m.fields {
+			m.fields = true
+			m.handleTaskBak(w, p)
+		}
+		m.lock.Unlock()
+	}
+	var wp alitsdb_serialization.MputPoint
+
+	// Timestamps in AliTSDB must be millisecond precision:
+	wp.Timestamp = p.Timestamp.UTC().UnixNano() / 1e6
+	// sanity check
+	{
+		x := fmt.Sprintf("%d", wp.Timestamp)
+		if len(x) != 13 {
+			panic("serialized timestamp was not 13 digits")
+		}
+	}
+
+	// series key allocation
+	var sortedKeys *SortedTagKeys
+	if sortedTagkeysCache.Has(string(p.MeasurementName)) {
+		tmp, ok := sortedTagkeysCache.Get(string(p.MeasurementName))
+		if !ok {
+			log.Fatalf("measurement \"%s\" lost in the concurrent access\n", string(p.MeasurementName))
+		}
+
+		sortedKeys, ok = tmp.(*SortedTagKeys)
+		if !ok {
+			log.Fatalf("the value retrieved from sortedTagkeysCache is not the expected type")
+		}
+	} else {
+		sortedKeys = NewSortedTagKeys(p.TagKeys)
+		sortedTagkeysCache.SetIfAbsent(string(p.MeasurementName), sortedKeys)
+	}
+
+	var serieskeyBuf bytes.Buffer
+	serieskeyBuf.Write(p.MeasurementName)
+	for i := 0; i < len(sortedKeys.StringSlice); i++ {
+		// append the ",""
+		serieskeyBuf.WriteByte(byte(SerieskeyDelimeter))
+		serieskeyBuf.WriteString(sortedKeys.StringSlice[i])
+		serieskeyBuf.WriteByte(byte(KeyValuePairDelimeter))
+		serieskeyBuf.Write(p.TagValues[sortedKeys.orgIndexs[i]])
+	}
+	wp.Serieskey = serieskeyBuf.String()
+
+	wp.Fvalues = make([]float64, len(p.FieldKeys))
+	/* */
+
+	// fields allocation
+
+	for i := 0; i < len(p.FieldKeys); i++ {
+		var value float64
+		switch x := p.FieldValues[i].(type) {
+		case int:
+			value = float64(x)
+		case int64:
+			value = float64(x)
+		case float32:
+			value = float64(x)
+		case float64:
+			value = float64(x)
+		default:
+			panic("bad numeric value for AliTSDB serialization")
+		}
+		wp.Fvalues[i] = value
+	}
+
+	// write to the out stream
+	out, err := wp.Marshal()
+	if err != nil {
+		log.Fatal(err)
+	}
+	s := uint64(len(out))
+	m.lock.Lock()
+	binary.Write(w, binary.LittleEndian, s)
+	w.Write(out)
+	m.lock.Unlock()
+}
+
+func (m *SerializerAliTSDB) handleTaskBak(w io.Writer, p *Point) {
+	var mp alitsdb_serialization.MputRequest
+	var wp alitsdb_serialization.MputPoint
+	mp.Points = make([]*alitsdb_serialization.MputPoint, 1)
+	mp.Points[0] = &wp
+	//wp.Reset()
 
 	// Timestamps in AliTSDB must be millisecond precision:
 	wp.Timestamp = p.Timestamp.UTC().UnixNano() / 1e6
@@ -181,37 +293,52 @@ func (m *SerializerAliTSDB) SerializePoint(w io.Writer, p *Point) (err error) {
 	wp.Serieskey = serieskeyBuf.String()
 
 	// fields allocation
-	wp.Fields = make(map[string]float64, len(p.FieldKeys))
+	mp.Fnames = make([]string, len(p.FieldKeys))
+	wp.Fvalues = make([]float64, len(p.FieldKeys))
 
 	// for each Value, generate a new line in the output:
 	for i := 0; i < len(p.FieldKeys); i++ {
+		mp.Fnames[i] = string(p.FieldKeys[i])
 		switch x := p.FieldValues[i].(type) {
 		case int:
-			wp.Fields[string(p.FieldKeys[i])] = float64(x)
+			wp.Fvalues[i] = float64(x)
 		case int64:
-			wp.Fields[string(p.FieldKeys[i])] = float64(x)
+			wp.Fvalues[i] = float64(x)
 		case float32:
-			wp.Fields[string(p.FieldKeys[i])] = float64(x)
+			wp.Fvalues[i] = float64(x)
 		case float64:
-			wp.Fields[string(p.FieldKeys[i])] = float64(x)
+			wp.Fvalues[i] = float64(x)
 		default:
 			panic("bad numeric value for AliTSDB serialization")
 		}
 	}
 
 	// write to the out stream
-	out, err := wp.Marshal()
+	out, err := mp.Marshal()
 	if err != nil {
 		log.Fatal(err)
 	}
 	s := uint64(len(out))
 	binary.Write(w, binary.LittleEndian, s)
 	w.Write(out)
+}
 
+func (m *SerializerAliTSDB) handlePoint() {
+	for t := range(m.pChan) {
+		m.handleTask(t.w, t.point)
+	}
+}
+
+func (m *SerializerAliTSDB) SerializePoint(w io.Writer, p *Point) (err error) {
+	m.wg.Add(1)
+	t := &task{p, w}
+	//m.handleTask(w, p)
+	m.pChan <- t
 	return nil
 }
 
-func (s *SerializerAliTSDB) SerializeSize(w io.Writer, points int64, values int64) error {
+func (m *SerializerAliTSDB) SerializeSize(w io.Writer, points int64, values int64) error {
+	m.wg.Wait()
 	//return serializeSizeInText(w, points, values)
 	return nil
 }

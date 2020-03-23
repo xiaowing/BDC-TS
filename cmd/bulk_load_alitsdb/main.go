@@ -5,6 +5,9 @@
 package main
 
 import (
+	"net/http"
+	_ "net/http/pprof"
+
 	"bufio"
 	"bytes"
 	"encoding/binary"
@@ -21,11 +24,10 @@ import (
 	"time"
 
 	alitsdb_serialization "github.com/caict-benchmark/BDC-TS/alitsdb_serializaition"
-
-	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/vehicle"
 	hash "github.com/spaolacci/murmur3"
 
 	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/common"
+	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/vehicle"
 	"github.com/caict-benchmark/BDC-TS/util/report"
 	"github.com/klauspost/compress/gzip"
 	"github.com/pkg/profile"
@@ -56,12 +58,13 @@ var (
 // Global vars
 var (
 	bufPool sync.Pool
+	pointPool sync.Pool
 
 	// channel for http write
 	batchChan chan *bytes.Buffer
 	// channel for RPC write
 	batchPointsChan chan []*alitsdb_serialization.MultifieldPoint
-	writers  []LineProtocolWriter
+	writers         []LineProtocolWriter
 
 	monitorChan chan bool
 
@@ -143,6 +146,12 @@ func init() {
 	}
 }
 
+func startHttpServer() {
+	if err := http.ListenAndServe(":80", nil); err != nil {
+		log.Fatalf("HTTP Server Failed: %v", err)
+	}
+}
+
 func main() {
 	if cpuProfile != "" {
 		f, err := os.Create(cpuProfile)
@@ -213,6 +222,7 @@ func main() {
 	if debug {
 		// monitoring the channel
 		go channelMonitor()
+		go startHttpServer()
 	}
 
 	start := time.Now()
@@ -305,7 +315,7 @@ func scanJSONfileForHTTP(linesPerBatch int) (int64, int64) {
 	zw.Write(openbracket)
 	zw.Write(newline)
 
-	scanner := bufio.NewScanner(bufio.NewReaderSize(os.Stdin, 4*1024*1024))
+	scanner := bufio.NewScanner(bufio.NewReaderSize(os.Stdin, 40*1024*1024))
 	for scanner.Scan() {
 		itemsRead++
 		if n > 0 {
@@ -356,9 +366,46 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 	var err error
 	var size uint64
 	//TODO:
-	byteBuff := make([]byte, 100*1024)
 	reader := bufio.NewReaderSize(os.Stdin, 4*1024*1024)
-	lb := hash.New64()
+	count := 0
+	last := time.Now()
+	first := true
+
+	pointPool = sync.Pool{
+		New: func() interface{} {
+			return new(alitsdb_serialization.MputPoint)
+		},
+	}
+
+	bytePool := sync.Pool{
+		New: func() interface{} {
+			return make([]byte, 100*1024)
+		},
+	}
+
+	recv := make(chan []byte, runtime.NumCPU() * 2)
+
+	for i := 0; i < runtime.NumCPU() / 4; i++ {
+		go func() {
+			for byteBuff := range(recv) {
+				basePoint := pointPool.Get().(*alitsdb_serialization.MputPoint)
+
+				err = basePoint.Unmarshal(byteBuff[:size])
+				if err != nil {
+					log.Fatalf("cannot unmarshall %d item: %v\n", itemsRead, err)
+				}
+
+				lb := hash.New64()
+				lb.Write([]byte(basePoint.Serieskey))
+				writer := writers[lb.Sum64()%uint64(len(writers))]
+				lb.Reset()
+
+				writer.PutPoint(basePoint)
+				bytePool.Put(byteBuff)
+			}
+		}()
+	}
+
 	for {
 		err = binary.Read(reader, binary.LittleEndian, &size)
 		if err == io.EOF {
@@ -368,6 +415,8 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 		if err != nil {
 			log.Fatalf("cannot read size of %d item: %v\n", itemsRead, err)
 		}
+
+		byteBuff := bytePool.Get().([]byte)
 
 		if uint64(cap(byteBuff)) < size {
 			byteBuff = make([]byte, size)
@@ -388,18 +437,53 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 		if bytesPerItem != size {
 			log.Fatalf("cannot read %d item: read %d, expected %d\n", itemsRead, bytesPerItem, size)
 		}
-		basePoint := new(alitsdb_serialization.MultifieldPoint)
 
-		err = basePoint.Unmarshal(byteBuff[:size])
-		if err != nil {
-			log.Fatalf("cannot unmarshall %d item: %v\n", itemsRead, err)
+		if first {
+			first = false
+
+			basePoint := new(alitsdb_serialization.MputRequest)
+
+			err = basePoint.Unmarshal(byteBuff[:size])
+			if err != nil {
+				log.Fatalf("cannot unmarshall %d item: %v\n", itemsRead, err)
+			}
+
+			lb := hash.New64()
+			lb.Write([]byte(basePoint.Points[0].Serieskey))
+			writer := writers[lb.Sum64()%uint64(len(writers))]
+			lb.Reset()
+
+			writer.PutPointF(basePoint)
+		} else{
+			recv <- byteBuff
+			//basePoint := pointPool.Get().(*alitsdb_serialization.MputPoint)
+			//
+			///* wait count */
+			//go func(byteBuff []byte) {
+			//	err = basePoint.Unmarshal(byteBuff[:size])
+			//	if err != nil {
+			//		log.Fatalf("cannot unmarshall %d item: %v\n", itemsRead, err)
+			//	}
+			//
+			//	lb := hash.New64()
+			//	lb.Write([]byte(basePoint.Serieskey))
+			//	writer := writers[lb.Sum64()%uint64(len(writers))]
+			//	lb.Reset()
+			//
+			//	writer.PutPoint(basePoint)
+			//	bytePool.Put(byteBuff)
+			//}(byteBuff)
 		}
 
-		lb.Write([]byte(basePoint.Serieskey))
-		writer := writers[lb.Sum64()%uint64(len(writers))]
-		lb.Reset()
+		count = count + 1
+		if count%100000 == 0 {
 
-		writer.PutPoint(basePoint)
+			now := time.Now()
+			dur := now.Sub(last).Milliseconds()
+			last = now
+
+			fmt.Printf("written: %d in %dms\n", count, dur)
+		}
 
 		bytesRead += int64(size) + 8
 

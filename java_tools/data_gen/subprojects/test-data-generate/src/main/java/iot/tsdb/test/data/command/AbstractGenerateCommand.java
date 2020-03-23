@@ -1,13 +1,12 @@
 package iot.tsdb.test.data.command;
 
+import com.beust.jcommander.Parameter;
+import iot.tsdb.test.data.meta.DataSetMeta;
+import iot.tsdb.test.data.runner.WriteToFileRunner;
+
 import java.io.File;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-
-import com.beust.jcommander.Parameter;
-
-import iot.tsdb.test.data.meta.DataSetMeta;
-import iot.tsdb.test.data.runner.WriteToFileRunner;
 
 public abstract class AbstractGenerateCommand implements Runnable {
 
@@ -39,6 +38,11 @@ public abstract class AbstractGenerateCommand implements Runnable {
     @Parameter(names = "--userType", description = "0 for low voltage, 1 for medium and high voltage")
     protected int userType;
 
+    @Parameter(names = "--aliTSDB", description = "use alibaba TSDB")
+    protected boolean aliTSDB = false;
+    @Parameter(names = "--aliMetric", description = "the metric for alibaba TSDB")
+    protected String aliMetric = "electric";
+
 
     private ExecutorService executorService;
 
@@ -56,7 +60,7 @@ public abstract class AbstractGenerateCommand implements Runnable {
             int endId = startId + count - 1;
             DataSetMeta meta = buildDataSetMeta(startId, endId);
 
-            WriteToFileRunner runner = new WriteToFileRunner(batchSize, queueSize, getFileName(i), meta, seed, userType);
+            WriteToFileRunner runner = new WriteToFileRunner(batchSize, queueSize, getFileName(i), meta, seed, userType, aliTSDB, aliMetric);
             executorService.submit(runner);
         }
         executorService.shutdown();

@@ -1,3 +1,5 @@
+// bulk_load_opentsdb loads an OpenTSDB daemon with data from stdin.
+//
 // The caller is responsible for assuring that the database is empty before
 // bulk load.
 package main
@@ -13,6 +15,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +23,7 @@ import (
 	alitsdb_serialization "github.com/caict-benchmark/BDC-TS/alitsdb_serializaition"
 
 	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/vehicle"
+	hash "github.com/spaolacci/murmur3"
 
 	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/common"
 	"github.com/caict-benchmark/BDC-TS/util/report"
@@ -57,6 +61,7 @@ var (
 	batchChan chan *bytes.Buffer
 	// channel for RPC write
 	batchPointsChan chan []*alitsdb_serialization.MultifieldPoint
+	writers  []LineProtocolWriter
 
 	monitorChan chan bool
 
@@ -96,6 +101,7 @@ func init() {
 	flag.Parse()
 
 	daemonUrls = strings.Split(hosts, ",")
+	sort.Strings(daemonUrls)
 	if len(daemonUrls) == 0 {
 		log.Fatal("missing 'urls' flag")
 	}
@@ -180,20 +186,25 @@ func main() {
 	backingOffChan = make(chan bool, 100)
 	backingOffDone = make(chan struct{})
 
-	for i := 0; i < workers; i++ {
-		daemonURL := daemonUrls[i%len(daemonUrls)]
-		workersGroup.Add(1)
+	writers = make([]LineProtocolWriter, len(daemonUrls))
+	for i := 0; i < len(daemonUrls); i++ {
 		var writer LineProtocolWriter
 
 		cfg := WriterConfig{
-			Host: daemonURL,
+			Host: daemonUrls[i],
 			Port: port,
 		}
-		if viaHTTP {
-			writer = NewHTTPWriter(cfg)
-		} else {
-			writer = NewRPCWriter(cfg)
-		}
+		//if viaHTTP {
+		//	writer = NewHTTPWriter(cfg)
+		//} else {
+		writer = NewRPCWriter(cfg)
+		//}
+
+		writers[i] = writer
+	}
+
+	for i := 0; i < workers; i++ {
+		writer := writers[i%len(daemonUrls)]
 		go writer.ProcessBatches(doLoad, &bufPool, &workersGroup, backoff, backingOffChan)
 	}
 
@@ -344,11 +355,10 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 	var itemsRead, bytesRead int64
 	var err error
 	var size uint64
-	var n int
 	//TODO:
-	buff := make([]*alitsdb_serialization.MultifieldPoint, 0, itemsPerBatch)
 	byteBuff := make([]byte, 100*1024)
 	reader := bufio.NewReaderSize(os.Stdin, 4*1024*1024)
+	lb := hash.New64()
 	for {
 		err = binary.Read(reader, binary.LittleEndian, &size)
 		if err == io.EOF {
@@ -385,28 +395,19 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 			log.Fatalf("cannot unmarshall %d item: %v\n", itemsRead, err)
 		}
 
+		lb.Write([]byte(basePoint.Serieskey))
+		writer := writers[lb.Sum64()%uint64(len(writers))]
+		lb.Reset()
+
+		writer.PutPoint(basePoint)
+
 		bytesRead += int64(size) + 8
 
-		buff = append(buff, basePoint)
 		itemsRead++
-		n++
-
-		if n > 0 && (n >= itemsPerBatch) {
-			batchPointsChan <- buff
-			n = 0
-			buff = nil
-			buff = make([]*alitsdb_serialization.MultifieldPoint, 0, itemsPerBatch)
-		}
 	}
 
 	if err != nil && err != io.EOF {
 		log.Fatalf("Error reading input after %d items: %s", itemsRead, err.Error())
-	}
-
-	// Finished reading input, make sure last batch goes out.
-	if n > 0 {
-		batchPointsChan <- buff
-		buff = nil
 	}
 
 	// Closing inputDone signals to the application that we've read everything and can now shut down.
@@ -414,6 +415,37 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 
 	return itemsRead, (itemsRead * int64(FieldsNum))
 }
+
+// processBatches reads byte buffers from batchChan and writes them to the target server, while tracking stats on the write.
+/**
+func processBatches(w LineProtocolWriter) {
+	for batch := range batchChan {
+		// Write the batch: try until backoff is not needed.
+		if doLoad {
+			var err error
+			for {
+				_, err = w.WriteLineProtocol(batch.Bytes())
+				if err == BackoffError {
+					backingOffChan <- true
+					time.Sleep(backoff)
+				} else {
+					backingOffChan <- false
+					break
+				}
+			}
+			if err != nil {
+				log.Fatalf("Error writing: %s\n", err.Error())
+			}
+		}
+		//fmt.Println(string(batch.Bytes()))
+
+		// Return the batch buffer to the pool.
+		batch.Reset()
+		bufPool.Put(batch)
+	}
+	workersGroup.Done()
+}
+*/
 
 func processBackoffMessages() {
 	var totalBackoffSecs float64

@@ -21,7 +21,6 @@ const MputAttemptsLimit = 4
 
 var (
 	fieldNameCache = cmap.New()
-	Fnames 	   		[]string
 )
 
 type RpcWriter struct {
@@ -52,7 +51,7 @@ func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization
 				if !resp.Ret {
 					log.Println("[WARN] mput request succeeded but retval is false")
 				}
-				log.Printf("write success(%s: %d).\n", w.url, len(req.Points))
+				//log.Printf("write success(%s: %d).\n", w.url, len(req.Points))
 				// request succeeded so no need to retry
 				retries = 0
 			} else {
@@ -172,8 +171,8 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 				req.Points = make([]*alitsdb_serialization.MputPoint, len(buff))
 				for i, p := range(buff) {
 					req.Points[i] = p.Points[0]
+					req.Fnames = p.Fnames
 				}
-				req.Fnames = Fnames
 				_, err = w.WriteLineProtocol(client, req)
 				req.Reset()
 				requestPool.Put(req)

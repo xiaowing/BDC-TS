@@ -418,7 +418,8 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 		}
 
 		bytesPerItem := uint64(0)
-		for i := 10; i > 0; i-- {
+		retries := 0
+		for {
 			r, err := reader.Read(byteBuff[bytesPerItem:size])
 			if err != nil && err != io.EOF {
 				log.Fatalf("cannot read %d item: %v\n", itemsRead, err)
@@ -426,6 +427,11 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 			bytesPerItem += uint64(r)
 			if bytesPerItem == size {
 				break
+			}
+			retries++
+			if retries > 10 {
+				retries = 0
+				log.Printf("tries, cannot read %d item: read %d, expected %d\n", itemsRead, bytesPerItem, size)
 			}
 		}
 

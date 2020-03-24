@@ -1,8 +1,13 @@
+// bulk_load_opentsdb loads an OpenTSDB daemon with data from stdin.
+//
 // The caller is responsible for assuring that the database is empty before
 // bulk load.
 package main
 
 import (
+	"net/http"
+	_ "net/http/pprof"
+
 	"bufio"
 	"bytes"
 	"encoding/binary"
@@ -13,15 +18,15 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	alitsdb_serialization "github.com/caict-benchmark/BDC-TS/alitsdb_serializaition"
 
-	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/vehicle"
-
 	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/common"
+	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/vehicle"
 	"github.com/caict-benchmark/BDC-TS/util/report"
 	"github.com/klauspost/compress/gzip"
 	"github.com/pkg/profile"
@@ -52,11 +57,13 @@ var (
 // Global vars
 var (
 	bufPool sync.Pool
+	pointPool sync.Pool
 
 	// channel for http write
 	batchChan chan *bytes.Buffer
 	// channel for RPC write
 	batchPointsChan chan []*alitsdb_serialization.MultifieldPoint
+	writers         []LineProtocolWriter
 
 	monitorChan chan bool
 
@@ -96,6 +103,7 @@ func init() {
 	flag.Parse()
 
 	daemonUrls = strings.Split(hosts, ",")
+	sort.Strings(daemonUrls)
 	if len(daemonUrls) == 0 {
 		log.Fatal("missing 'urls' flag")
 	}
@@ -134,6 +142,12 @@ func init() {
 		FieldsNum = len(vehicle.EntityFieldKeys)
 	default:
 		log.Fatalf("Use case '%s' not supported", useCase)
+	}
+}
+
+func startHttpServer() {
+	if err := http.ListenAndServe(":80", nil); err != nil {
+		log.Fatalf("HTTP Server Failed: %v", err)
 	}
 }
 
@@ -180,20 +194,25 @@ func main() {
 	backingOffChan = make(chan bool, 100)
 	backingOffDone = make(chan struct{})
 
-	for i := 0; i < workers; i++ {
-		daemonURL := daemonUrls[i%len(daemonUrls)]
-		workersGroup.Add(1)
+	writers = make([]LineProtocolWriter, len(daemonUrls))
+	for i := 0; i < len(daemonUrls); i++ {
 		var writer LineProtocolWriter
 
 		cfg := WriterConfig{
-			Host: daemonURL,
+			Host: daemonUrls[i],
 			Port: port,
 		}
-		if viaHTTP {
-			writer = NewHTTPWriter(cfg)
-		} else {
-			writer = NewRPCWriter(cfg)
-		}
+		//if viaHTTP {
+		//	writer = NewHTTPWriter(cfg)
+		//} else {
+		writer = NewRPCWriter(cfg)
+		//}
+
+		writers[i] = writer
+	}
+
+	for i := 0; i < workers; i++ {
+		writer := writers[i%len(daemonUrls)]
 		go writer.ProcessBatches(doLoad, &bufPool, &workersGroup, backoff, backingOffChan)
 	}
 
@@ -202,6 +221,7 @@ func main() {
 	if debug {
 		// monitoring the channel
 		go channelMonitor()
+		go startHttpServer()
 	}
 
 	start := time.Now()
@@ -294,7 +314,7 @@ func scanJSONfileForHTTP(linesPerBatch int) (int64, int64) {
 	zw.Write(openbracket)
 	zw.Write(newline)
 
-	scanner := bufio.NewScanner(bufio.NewReaderSize(os.Stdin, 4*1024*1024))
+	scanner := bufio.NewScanner(bufio.NewReaderSize(os.Stdin, 40*1024*1024))
 	for scanner.Scan() {
 		itemsRead++
 		if n > 0 {
@@ -344,11 +364,43 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 	var itemsRead, bytesRead int64
 	var err error
 	var size uint64
-	var n int
 	//TODO:
-	buff := make([]*alitsdb_serialization.MultifieldPoint, 0, itemsPerBatch)
-	byteBuff := make([]byte, 100*1024)
 	reader := bufio.NewReaderSize(os.Stdin, 4*1024*1024)
+	count := 0
+	last := time.Now()
+
+	pointPool = sync.Pool{
+		New: func() interface{} {
+			return new(alitsdb_serialization.MputRequest)
+		},
+	}
+
+	bytePool := sync.Pool{
+		New: func() interface{} {
+			return make([]byte, 100*1024)
+		},
+	}
+
+	recv := make(chan []byte, runtime.NumCPU() * 2)
+
+	for i := 0; i < runtime.NumCPU() / 4; i++ {
+		go func() {
+			for byteBuff := range(recv) {
+				basePoint := pointPool.Get().(*alitsdb_serialization.MputRequest)
+
+				err = basePoint.Unmarshal(byteBuff[:size])
+				if err != nil {
+					log.Fatalf("cannot unmarshall %d item: %v\n", itemsRead, err)
+				}
+
+				writer := writers[int(basePoint.Points[0].Serieskey[len(basePoint.Points[0].Serieskey) - 1])%len(writers)]
+
+				writer.PutPoint(basePoint)
+				bytePool.Put(byteBuff)
+			}
+		}()
+	}
+
 	for {
 		err = binary.Read(reader, binary.LittleEndian, &size)
 		if err == io.EOF {
@@ -359,12 +411,15 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 			log.Fatalf("cannot read size of %d item: %v\n", itemsRead, err)
 		}
 
+		byteBuff := bytePool.Get().([]byte)
+
 		if uint64(cap(byteBuff)) < size {
 			byteBuff = make([]byte, size)
 		}
 
 		bytesPerItem := uint64(0)
-		for i := 10; i > 0; i-- {
+		retries := 0
+		for {
 			r, err := reader.Read(byteBuff[bytesPerItem:size])
 			if err != nil && err != io.EOF {
 				log.Fatalf("cannot read %d item: %v\n", itemsRead, err)
@@ -373,40 +428,36 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 			if bytesPerItem == size {
 				break
 			}
+			retries++
+			if retries > 10 {
+				retries = 0
+				log.Printf("tries, cannot read %d item: read %d, expected %d\n", itemsRead, bytesPerItem, size)
+			}
 		}
 
 		if bytesPerItem != size {
 			log.Fatalf("cannot read %d item: read %d, expected %d\n", itemsRead, bytesPerItem, size)
 		}
-		basePoint := new(alitsdb_serialization.MultifieldPoint)
 
-		err = basePoint.Unmarshal(byteBuff[:size])
-		if err != nil {
-			log.Fatalf("cannot unmarshall %d item: %v\n", itemsRead, err)
+		recv <- byteBuff
+
+		count = count + 1
+		if count%100000 == 0 {
+
+			now := time.Now()
+			dur := now.Sub(last).Milliseconds()
+			last = now
+
+			fmt.Printf("written: %d in %dms\n", count, dur)
 		}
 
 		bytesRead += int64(size) + 8
 
-		buff = append(buff, basePoint)
 		itemsRead++
-		n++
-
-		if n > 0 && (n >= itemsPerBatch) {
-			batchPointsChan <- buff
-			n = 0
-			buff = nil
-			buff = make([]*alitsdb_serialization.MultifieldPoint, 0, itemsPerBatch)
-		}
 	}
 
 	if err != nil && err != io.EOF {
 		log.Fatalf("Error reading input after %d items: %s", itemsRead, err.Error())
-	}
-
-	// Finished reading input, make sure last batch goes out.
-	if n > 0 {
-		batchPointsChan <- buff
-		buff = nil
 	}
 
 	// Closing inputDone signals to the application that we've read everything and can now shut down.
@@ -414,6 +465,37 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 
 	return itemsRead, (itemsRead * int64(FieldsNum))
 }
+
+// processBatches reads byte buffers from batchChan and writes them to the target server, while tracking stats on the write.
+/**
+func processBatches(w LineProtocolWriter) {
+	for batch := range batchChan {
+		// Write the batch: try until backoff is not needed.
+		if doLoad {
+			var err error
+			for {
+				_, err = w.WriteLineProtocol(batch.Bytes())
+				if err == BackoffError {
+					backingOffChan <- true
+					time.Sleep(backoff)
+				} else {
+					backingOffChan <- false
+					break
+				}
+			}
+			if err != nil {
+				log.Fatalf("Error writing: %s\n", err.Error())
+			}
+		}
+		//fmt.Println(string(batch.Bytes()))
+
+		// Return the batch buffer to the pool.
+		batch.Reset()
+		bufPool.Put(batch)
+	}
+	workersGroup.Done()
+}
+*/
 
 func processBackoffMessages() {
 	var totalBackoffSecs float64

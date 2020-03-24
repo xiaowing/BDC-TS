@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	alitsdb_serialization "github.com/caict-benchmark/BDC-TS/alitsdb_serializaition"
 	"log"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ type LineProtocolWriter interface {
 
 	//WriteLineProtocol([]byte) (latencyNs int64, err error)
 	ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.WaitGroup, backoff time.Duration, backingOffChan chan bool)
+	PutPoint(point *alitsdb_serialization.MputRequest)
 }
 
 // HTTPWriterConfig is the configuration used to create an HTTPWriter.
@@ -58,6 +60,10 @@ var (
 	post                  = []byte("POST")
 	applicationJsonHeader = []byte("application/json")
 )
+
+func (w *HTTPWriter) PutPoint(point *alitsdb_serialization.MputRequest) {
+}
+
 
 // WriteLineProtocol writes the given byte slice to the HTTP server described in the Writer's HTTPWriterConfig.
 // It returns the latency in nanoseconds and any error received while sending the data over HTTP,

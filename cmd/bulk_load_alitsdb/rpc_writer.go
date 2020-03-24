@@ -24,48 +24,48 @@ var (
 )
 
 type RpcWriter struct {
-	c      WriterConfig
-	url    string
-	conn   *grpc.ClientConn
-	client alitsdb_serialization.MultiFieldsPutServiceClient
+	c          WriterConfig
+	url        string
+	pointsChan chan *alitsdb_serialization.MputRequest
 }
 
 // WriteLineProtocol returns the latency in nanoseconds and any error received while sending the data over RPC,
 // or it returns a new error if the RPC response isn't as expected.
-func (w *RpcWriter) WriteLineProtocol(points []*alitsdb_serialization.MultifieldPoint) (latencyNs int64, err error) {
+func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization.MputRequest) (latencyNs int64, err error) {
 	start := time.Now()
-
-	//TODO: build the request
-	req := new(alitsdb_serialization.MputRequest)
-	req.Points, req.Fnames = convertMultifieldPoints2MputPoints(points)
 
 	if doLoad {
 		retries := MputAttemptsLimit
 
 		for retries > 0 {
+			last := time.Now()
 			//TODO: send the write request
-			resp, err := w.client.Mput(context.Background(), req)
+			resp, err := client.client.Mput(context.Background(), req)
+			now := time.Now()
+			dur := now.Sub(last).Milliseconds()
+			if dur > 1000 {
+				log.Printf("Timeout request mput points(%d): %dms %s\n", len(req.Points), dur, client.url)
+			}
+
 			if err == nil {
 				if !resp.Ret {
 					log.Println("[WARN] mput request succeeded but retval is false")
 				}
+				//log.Printf("write success(%s: %d).\n", w.url, len(req.Points))
 				// request succeeded so no need to retry
 				retries = 0
 			} else {
-				log.Printf("Error request mput interface: %s\n", err.Error())
+				log.Printf("Error request mput interface(%d: %d): %s\n", len(req.Fnames), len(req.Points), err.Error())
 				retries--
 
 				// wait a while
 				time.Sleep(time.Duration((MputAttemptsLimit-retries)*5) * time.Second)
 				// then start to retry
-				w.conn.Close()
-
-				conn, err := grpc.Dial(w.url, grpc.WithInsecure())
-				if err != nil {
-					log.Printf("Error connecting: %s\n", err.Error())
+				client.close()
+				if (client.init() != nil) {
+					/* init failed */
+					break
 				}
-				w.conn = conn
-				w.client = alitsdb_serialization.NewMultiFieldsPutServiceClient(w.conn)
 			}
 		}
 	}
@@ -82,101 +82,120 @@ func NewRPCWriter(c WriterConfig) LineProtocolWriter {
 		url: fmt.Sprintf("%s:%d", c.Host, c.Port),
 	}
 
-	conn, err := grpc.Dial(writer.url, grpc.WithInsecure())
-	if err != nil {
+	client := newClient(writer.url)
+	err := client.init()
+	if (err != nil) {
 		log.Fatalf("Error connecting: %s\n", err.Error())
 	}
 
-	writer.conn = conn
-	writer.client = alitsdb_serialization.NewMultiFieldsPutServiceClient(writer.conn)
+	client.close()
+
+	writer.pointsChan = make(chan *alitsdb_serialization.MputRequest, batchSize * 100)
 
 	return writer
 }
 
 func (w *RpcWriter) close() {
-	w.conn.Close()
+}
+
+func (w *RpcWriter) PutPoint(point *alitsdb_serialization.MputRequest) {
+	if debug {
+		size := len(w.pointsChan)
+		if size <= batchSize && size > 0 {
+			fmt.Printf("size: %d\n", size)
+		}
+	}
+	w.pointsChan <- point
+}
+
+type Client struct {
+	url 		string
+	conn       *grpc.ClientConn
+	client     alitsdb_serialization.MultiFieldsPutServiceClient
+}
+
+func newClient(url string) *Client {
+	return &Client{url:url}
+}
+
+func (c *Client) close() {
+	c.conn.Close()
+}
+
+func (c *Client) init() (error) {
+	retries := 0
+	for {
+		conn, err := grpc.Dial(c.url, grpc.WithInsecure())
+		if err != nil {
+			log.Printf("Error connecting: %s\n", err.Error())
+			retries++
+			if retries > 3 {
+				return err
+			}
+			time.Sleep(time.Duration(retries*1) * time.Second)
+		}
+
+		c.conn = conn
+		c.client = alitsdb_serialization.NewMultiFieldsPutServiceClient(c.conn)
+		return nil
+	}
+}
+
+var requestPool = sync.Pool{
+	New: func() interface{} {
+		return new(alitsdb_serialization.MputRequest)
+	},
 }
 
 // ProcessBatches read the data from input stream and write by batch
 func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.WaitGroup, backoff time.Duration, backingOffChan chan bool) {
 	defer w.close()
 
-	for batch := range batchPointsChan {
-		var err error
-		for {
-			_, err = w.WriteLineProtocol(batch)
-			backingOffChan <- false
-			break
-		}
-		if err != nil {
-			log.Fatalf("Error writing: %s\n", err.Error())
+	client := newClient(w.url)
+	if (client.init() != nil) {
+		return
+	}
+
+	buff := make([]*alitsdb_serialization.MputRequest, 0, batchSize)
+	var n int
+	for basePoint := range w.pointsChan {
+
+		buff = append(buff, basePoint)
+		n++
+		if n > 0 && (n >= batchSize) {
+
+			var err error
+			for {
+				req := requestPool.Get().(*alitsdb_serialization.MputRequest)
+				//req := new(alitsdb_serialization.MputRequest)
+				req.Points = make([]*alitsdb_serialization.MputPoint, len(buff))
+				for i, p := range(buff) {
+					req.Points[i] = p.Points[0]
+					req.Fnames = p.Fnames
+				}
+				_, err = w.WriteLineProtocol(client, req)
+				req.Reset()
+				requestPool.Put(req)
+
+				for _, p := range(buff) {
+					p.Reset()
+					pointPool.Put(p)
+				}
+
+				backingOffChan <- false
+				break
+			}
+			if err != nil {
+				log.Fatalf("Error writing: %s\n", err.Error())
+			}
+
+			n = 0
+			buff = nil
+			buff = make([]*alitsdb_serialization.MputRequest, 0, batchSize)
 		}
 	}
 
 	wg.Done()
-}
-
-func convertMultifieldPoints2MputPoints(mfps []*alitsdb_serialization.MultifieldPoint) ([]*alitsdb_serialization.MputPoint, []string) {
-	var batchMeticNname, metric string
-	mputPoints := make([]*alitsdb_serialization.MputPoint, 0, len(mfps))
-	var fieldNames []string
-
-	for idx, p := range mfps {
-		metric = getMetric(p)
-		mputPoint := &alitsdb_serialization.MputPoint{
-			Timestamp: p.GetTimestamp(),
-			Serieskey: p.GetSerieskey(),
-			Fvalues:   make([]float64, 0, len(p.GetFields())),
-		}
-
-		// try to get the sorted fieldname list
-		if idx == 0 {
-			batchMeticNname = metric
-
-			if fieldNameCache.Has(metric) {
-				tmp, ok := fieldNameCache.Get(metric)
-				if !ok {
-					log.Fatalf("metric %s lost in the concurrent operations\n", metric)
-				}
-
-				fieldNames, ok = tmp.([]string)
-				if !ok {
-					log.Fatalf("incorrect field name type\n")
-				}
-			} else {
-				fieldNames = make([]string, 0, len(p.GetFields()))
-
-				for fieldName := range p.GetFields() {
-					fieldNames = append(fieldNames, fieldName)
-				}
-
-				fieldNameCache.SetIfAbsent(metric, fieldNames)
-			}
-		} else {
-			if strings.Compare(batchMeticNname, metric) != 0 {
-				log.Fatalf("there is a different metric \"%s\"within the current batch. \"%s\" expected", metric, batchMeticNname)
-			}
-
-			tmp, ok := fieldNameCache.Get(metric)
-			if !ok {
-				log.Fatalf("metric %s lost in the concurrent operations\n", metric)
-			}
-
-			fieldNames, ok = tmp.([]string)
-			if !ok {
-				log.Fatalf("incorrect field name type\n")
-			}
-		}
-
-		// map cannot garantee the order, so we have to set the value like this
-		for _, fname := range fieldNames {
-			mputPoint.Fvalues = append(mputPoint.Fvalues, p.Fields[fname])
-		}
-
-		mputPoints = append(mputPoints, mputPoint)
-	}
-
-	return mputPoints, fieldNames
 }
 
 func getMetric(mp *alitsdb_serialization.MultifieldPoint) string {

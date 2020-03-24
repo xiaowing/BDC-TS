@@ -228,6 +228,7 @@ func main() {
 	t := time.Now()
 	n := int64(0)
 	last := time.Now()
+	log.Printf("%d points\n", sim.Total())
 	for !sim.Finished() {
 		point := common.MakeUsablePoint()
 		sim.Next(point)
@@ -257,6 +258,8 @@ func main() {
 			currentInterleavedGroup = 0
 		}
 	}
+	log.Printf("%d - %d points\n", n, sim.Total())
+
 	if n != sim.SeenPoints() {
 		panic(fmt.Sprintf("Logic error, written %d points, generated %d points", n, sim.SeenPoints()))
 	}

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -65,9 +64,7 @@ type SerializerAliTSDBHttp struct {
 }
 
 type SerializerAliTSDB struct {
-	pChan chan *task
 	lock sync.Mutex
-	wg sync.WaitGroup
 	fields bool
 }
 
@@ -78,8 +75,6 @@ func NewSerializerAliTSDBHttp() *SerializerAliTSDBHttp {
 func NewSerializerAliTSDB() *SerializerAliTSDB {
 	serializerAliTSDB := &SerializerAliTSDB{}
 
-	serializerAliTSDB.start()
-	serializerAliTSDB.pChan = make(chan *task, 1000)
 	serializerAliTSDB.fields = false
 
 	return serializerAliTSDB
@@ -151,20 +146,12 @@ func (s *SerializerAliTSDBHttp) SerializeSize(w io.Writer, points int64, values 
 	return nil
 }
 
-func (m *SerializerAliTSDB) start() {
-	num := runtime.NumCPU()
-	for i := 0; i < num; i++ {
-		go m.handlePoint()
-	}
-}
-
 type task struct {
 	point *Point
 	w io.Writer
 }
 
 func (m *SerializerAliTSDB) handleTask(w io.Writer, p *Point) {
-	defer m.wg.Done()
 	if !m.fields {
 		m.lock.Lock()
 		if !m.fields {
@@ -323,22 +310,12 @@ func (m *SerializerAliTSDB) handleTaskBak(w io.Writer, p *Point) {
 	w.Write(out)
 }
 
-func (m *SerializerAliTSDB) handlePoint() {
-	for t := range(m.pChan) {
-		m.handleTask(t.w, t.point)
-	}
-}
-
 func (m *SerializerAliTSDB) SerializePoint(w io.Writer, p *Point) (err error) {
-	m.wg.Add(1)
-	t := &task{p, w}
-	//m.handleTask(w, p)
-	m.pChan <- t
+	m.handleTask(w, p)
 	return nil
 }
 
 func (m *SerializerAliTSDB) SerializeSize(w io.Writer, points int64, values int64) error {
-	m.wg.Wait()
 	//return serializeSizeInText(w, points, values)
 	return nil
 }

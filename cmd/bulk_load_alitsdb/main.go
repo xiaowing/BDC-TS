@@ -24,7 +24,6 @@ import (
 	"time"
 
 	alitsdb_serialization "github.com/caict-benchmark/BDC-TS/alitsdb_serializaition"
-	hash "github.com/spaolacci/murmur3"
 
 	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/common"
 	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/vehicle"
@@ -395,10 +394,7 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 					log.Fatalf("cannot unmarshall %d item: %v\n", itemsRead, err)
 				}
 
-				lb := hash.New64()
-				lb.Write([]byte(basePoint.Serieskey))
-				writer := writers[lb.Sum64()%uint64(len(writers))]
-				lb.Reset()
+				writer := writers[int(basePoint.Serieskey[len(basePoint.Serieskey) - 1])%len(writers)]
 
 				writer.PutPoint(basePoint)
 				bytePool.Put(byteBuff)
@@ -448,31 +444,11 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 				log.Fatalf("cannot unmarshall %d item: %v\n", itemsRead, err)
 			}
 
-			lb := hash.New64()
-			lb.Write([]byte(basePoint.Points[0].Serieskey))
-			writer := writers[lb.Sum64()%uint64(len(writers))]
-			lb.Reset()
+			writer := writers[int(basePoint.Points[0].Serieskey[len(basePoint.Points[0].Serieskey) - 1])%len(writers)]
 
 			writer.PutPointF(basePoint)
 		} else{
 			recv <- byteBuff
-			//basePoint := pointPool.Get().(*alitsdb_serialization.MputPoint)
-			//
-			///* wait count */
-			//go func(byteBuff []byte) {
-			//	err = basePoint.Unmarshal(byteBuff[:size])
-			//	if err != nil {
-			//		log.Fatalf("cannot unmarshall %d item: %v\n", itemsRead, err)
-			//	}
-			//
-			//	lb := hash.New64()
-			//	lb.Write([]byte(basePoint.Serieskey))
-			//	writer := writers[lb.Sum64()%uint64(len(writers))]
-			//	lb.Reset()
-			//
-			//	writer.PutPoint(basePoint)
-			//	bytePool.Put(byteBuff)
-			//}(byteBuff)
 		}
 
 		count = count + 1

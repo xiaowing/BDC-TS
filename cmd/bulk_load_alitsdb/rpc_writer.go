@@ -39,8 +39,15 @@ func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization
 		retries := MputAttemptsLimit
 
 		for retries > 0 {
+			last := time.Now()
 			//TODO: send the write request
 			resp, err := client.client.Mput(context.Background(), req)
+			now := time.Now()
+			dur := now.Sub(last).Milliseconds()
+			if dur > 1000 {
+				log.Printf("Timeout request mput points(%d): %dms %s\n", len(req.Points), dur, client.url)
+			}
+
 			if err == nil {
 				if !resp.Ret {
 					log.Println("[WARN] mput request succeeded but retval is false")
@@ -84,7 +91,7 @@ func NewRPCWriter(c WriterConfig) LineProtocolWriter {
 
 	client.close()
 
-	writer.pointsChan = make(chan *alitsdb_serialization.MputPoint, batchSize * 10)
+	writer.pointsChan = make(chan *alitsdb_serialization.MputPoint, batchSize * 100)
 
 	return writer
 }

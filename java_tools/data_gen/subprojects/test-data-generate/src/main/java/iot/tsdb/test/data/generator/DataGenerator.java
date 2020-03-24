@@ -5,7 +5,6 @@ import com.google.common.collect.AbstractIterator;
 import iot.tsdb.test.data.meta.DataSetMeta;
 
 import java.text.DecimalFormat;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
 import java.util.TreeMap;
@@ -133,17 +132,48 @@ public class DataGenerator extends AbstractIterator<String> {
         for (Map.Entry<String, String> entry : tags.entrySet()) {
             sb.append(",").append(entry.getKey()).append("=").append(entry.getValue());
         }
+        // ----------------- MultifieldPoint ---------------
         // fields
-        Map<String, Double> allFields = new HashMap<>();
-        for (String field : fields) {
-            double value = random.nextDouble() * 1000000;
-            allFields.put(field, Double.valueOf(df.format(value)));
-        }
-        return Alitsdb.MultifieldPoint
+//        Map<String, Double> allFields = new HashMap<>();
+//        for (String field : fields) {
+//            double value = random.nextDouble() * 1000000;
+//            allFields.put(field, Double.valueOf(df.format(value)));
+//        }
+//        return Alitsdb.MultifieldPoint
+//                .newBuilder()
+//                .setTimestamp(timestamp)
+//                .setSerieskey(sb.toString())
+//                .putAllFields(allFields)
+//                .build()
+//                .toByteString()
+//                .toStringUtf8();
+
+        // ----------------- MputPoint ---------------
+//        final Alitsdb.MputPoint.Builder builder = Alitsdb.MputPoint
+//                .newBuilder()
+//                .setTimestamp(timestamp)
+//                .setSerieskey(sb.toString());
+//        for (String ignored : fields) {
+//            double value = random.nextDouble() * 1000000;
+//            builder.addFvalues(Double.parseDouble(df.format(value)));
+//        }
+//        return builder.build()
+//                .toByteString()
+//                .toStringUtf8();
+
+        // ----------------- MputRequest -----------------
+        final Alitsdb.MputRequest.Builder finalBuilder = Alitsdb.MputRequest.newBuilder();
+        final Alitsdb.MputPoint.Builder builder = Alitsdb.MputPoint
                 .newBuilder()
                 .setTimestamp(timestamp)
-                .setSerieskey(sb.toString())
-                .putAllFields(allFields)
+                .setSerieskey(sb.toString());
+        for (String field : fields) {
+            finalBuilder.addFnames(field);
+            double value = random.nextDouble() * 1000000;
+            builder.addFvalues(Double.parseDouble(df.format(value)));
+        }
+        return finalBuilder
+                .addPoints(builder.build())
                 .build()
                 .toByteString()
                 .toStringUtf8();

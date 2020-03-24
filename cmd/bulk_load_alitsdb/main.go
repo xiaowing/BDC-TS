@@ -368,11 +368,10 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 	reader := bufio.NewReaderSize(os.Stdin, 4*1024*1024)
 	count := 0
 	last := time.Now()
-	first := true
 
 	pointPool = sync.Pool{
 		New: func() interface{} {
-			return new(alitsdb_serialization.MputPoint)
+			return new(alitsdb_serialization.MputRequest)
 		},
 	}
 
@@ -387,14 +386,14 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 	for i := 0; i < runtime.NumCPU() / 4; i++ {
 		go func() {
 			for byteBuff := range(recv) {
-				basePoint := pointPool.Get().(*alitsdb_serialization.MputPoint)
+				basePoint := pointPool.Get().(*alitsdb_serialization.MputRequest)
 
 				err = basePoint.Unmarshal(byteBuff[:size])
 				if err != nil {
 					log.Fatalf("cannot unmarshall %d item: %v\n", itemsRead, err)
 				}
 
-				writer := writers[int(basePoint.Serieskey[len(basePoint.Serieskey) - 1])%len(writers)]
+				writer := writers[int(basePoint.Points[0].Serieskey[len(basePoint.Points[0].Serieskey) - 1])%len(writers)]
 
 				writer.PutPoint(basePoint)
 				bytePool.Put(byteBuff)
@@ -434,22 +433,7 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 			log.Fatalf("cannot read %d item: read %d, expected %d\n", itemsRead, bytesPerItem, size)
 		}
 
-		if first {
-			first = false
-
-			basePoint := new(alitsdb_serialization.MputRequest)
-
-			err = basePoint.Unmarshal(byteBuff[:size])
-			if err != nil {
-				log.Fatalf("cannot unmarshall %d item: %v\n", itemsRead, err)
-			}
-
-			writer := writers[int(basePoint.Points[0].Serieskey[len(basePoint.Points[0].Serieskey) - 1])%len(writers)]
-
-			writer.PutPointF(basePoint)
-		} else{
-			recv <- byteBuff
-		}
+		recv <- byteBuff
 
 		count = count + 1
 		if count%100000 == 0 {

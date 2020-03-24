@@ -26,8 +26,7 @@ type LineProtocolWriter interface {
 
 	//WriteLineProtocol([]byte) (latencyNs int64, err error)
 	ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.WaitGroup, backoff time.Duration, backingOffChan chan bool)
-	PutPointF(point *alitsdb_serialization.MputRequest)
-	PutPoint(point *alitsdb_serialization.MputPoint)
+	PutPoint(point *alitsdb_serialization.MputRequest)
 }
 
 // HTTPWriterConfig is the configuration used to create an HTTPWriter.
@@ -62,10 +61,7 @@ var (
 	applicationJsonHeader = []byte("application/json")
 )
 
-func (w *HTTPWriter) PutPointF(point *alitsdb_serialization.MputRequest) {
-}
-
-func (w *HTTPWriter) PutPoint(point *alitsdb_serialization.MputPoint) {
+func (w *HTTPWriter) PutPoint(point *alitsdb_serialization.MputRequest) {
 }
 
 

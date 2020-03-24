@@ -27,7 +27,7 @@ var (
 type RpcWriter struct {
 	c          WriterConfig
 	url        string
-	pointsChan chan *alitsdb_serialization.MputPoint
+	pointsChan chan *alitsdb_serialization.MputRequest
 }
 
 // WriteLineProtocol returns the latency in nanoseconds and any error received while sending the data over RPC,
@@ -52,7 +52,7 @@ func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization
 				if !resp.Ret {
 					log.Println("[WARN] mput request succeeded but retval is false")
 				}
-				//log.Printf("write success(%s: %d).\n", w.url, len(req.Points))
+				log.Printf("write success(%s: %d).\n", w.url, len(req.Points))
 				// request succeeded so no need to retry
 				retries = 0
 			} else {
@@ -91,7 +91,7 @@ func NewRPCWriter(c WriterConfig) LineProtocolWriter {
 
 	client.close()
 
-	writer.pointsChan = make(chan *alitsdb_serialization.MputPoint, batchSize * 100)
+	writer.pointsChan = make(chan *alitsdb_serialization.MputRequest, batchSize * 100)
 
 	return writer
 }
@@ -99,18 +99,7 @@ func NewRPCWriter(c WriterConfig) LineProtocolWriter {
 func (w *RpcWriter) close() {
 }
 
-func (w *RpcWriter) PutPointF(req *alitsdb_serialization.MputRequest) {
-	client := newClient(w.url)
-	if (client.init() != nil) {
-		return
-	}
-
-	Fnames = req.Fnames
-
-	_, _ = w.WriteLineProtocol(client, req)
-}
-
-func (w *RpcWriter) PutPoint(point *alitsdb_serialization.MputPoint) {
+func (w *RpcWriter) PutPoint(point *alitsdb_serialization.MputRequest) {
 	if debug {
 		size := len(w.pointsChan)
 		if size <= batchSize && size > 0 {
@@ -168,7 +157,7 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 		return
 	}
 
-	buff := make([]*alitsdb_serialization.MputPoint, 0, batchSize)
+	buff := make([]*alitsdb_serialization.MputRequest, 0, batchSize)
 	var n int
 	for basePoint := range w.pointsChan {
 
@@ -180,11 +169,20 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 			for {
 				req := requestPool.Get().(*alitsdb_serialization.MputRequest)
 				//req := new(alitsdb_serialization.MputRequest)
-				req.Points = buff
+				req.Points = make([]*alitsdb_serialization.MputPoint, len(buff))
+				for i, p := range(buff) {
+					req.Points[i] = p.Points[0]
+				}
 				req.Fnames = Fnames
 				_, err = w.WriteLineProtocol(client, req)
 				req.Reset()
 				requestPool.Put(req)
+
+				for _, p := range(buff) {
+					p.Reset()
+					pointPool.Put(p)
+				}
+
 				backingOffChan <- false
 				break
 			}
@@ -192,15 +190,9 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 				log.Fatalf("Error writing: %s\n", err.Error())
 			}
 
-			/* release to buffer pool for reuse */
-			for _, p := range(buff) {
-				p.Reset()
-				pointPool.Put(p)
-			}
-
 			n = 0
 			buff = nil
-			buff = make([]*alitsdb_serialization.MputPoint, 0, batchSize)
+			buff = make([]*alitsdb_serialization.MputRequest, 0, batchSize)
 		}
 	}
 

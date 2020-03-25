@@ -149,7 +149,7 @@ func init() {
 
 func startHttpServer() {
 	if err := http.ListenAndServe(":80", nil); err != nil {
-		//fmt.Printf("HTTP Server Failed: %v\n", err)
+		fmt.Printf("HTTP Server Failed: %v\n", err)
 	}
 }
 
@@ -224,10 +224,8 @@ func main() {
 	if debug {
 		// monitoring the channel
 		go channelMonitor()
-		//go startHttpServer()
+		go startHttpServer()
 	}
-
-	go startHttpServer()
 
 	start := time.Now()
 	var itemsRead, valuesRead int64
@@ -371,8 +369,6 @@ func scanJSONfileForHTTP(linesPerBatch int) (int64, int64) {
 // scan reads one line at a time from stdin.
 // When the requested number of lines per batch is met, send a batch over batchChan for the workers to write.
 func scanBinaryfile(itemsPerBatch int) (int64, int64) {
-	log.Println("start load datas")
-	defer log.Println("end load datas")
 	var itemsRead, bytesRead int64
 	var err error
 	var size uint64

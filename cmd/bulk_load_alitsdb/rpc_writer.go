@@ -52,22 +52,27 @@ func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization
 				if !resp.Ret {
 					log.Println("[WARN] mput request succeeded but retval is false")
 				}
-				//log.Printf("write success(%s: %d).\n", w.url, len(req.Points))
 				// request succeeded so no need to retry
-				retries = 0
+				break
 			} else {
 				log.Printf("Error request mput interface(%d: %d): %s %s\n", len(req.Fnames), len(req.Points), client.url, err.Error())
 				retries--
 
 				// wait a while
-				time.Sleep(time.Duration((MputAttemptsLimit-retries)*5) * time.Second)
+				time.Sleep(time.Duration((MputAttemptsLimit-retries)*10) * time.Second)
 				// then start to retry
 				client.close()
 				if client.init() != nil {
 					/* init failed */
-					break
+					log.Println("[WARN] MultiFieldsPutServiceClient initialization failed")
+					retries = 0
 				}
 			}
+		}
+
+		// it means all attempts failed when the retries decreased to zero
+		if retries == 0 {
+			log.Fatalf("[Fatal]Error caused all retry attempts failed")
 		}
 	}
 

@@ -70,6 +70,8 @@ var (
 	inputDone      chan struct{}
 	workersGroup   sync.WaitGroup
 	backingOffChan chan bool
+
+	tasksGroup 	   sync.WaitGroup
 	backingOffDone chan struct{}
 	reportTags     [][2]string
 	reportHostname string
@@ -439,6 +441,7 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 			log.Fatalf("cannot read %d item: read %d, expected %d\n", itemsRead, bytesPerItem, size)
 		}
 
+		tasksGroup.Add(1)
 		recv <- byteBuff
 
 		count = count + 1
@@ -460,6 +463,7 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 		log.Fatalf("Error reading input after %d items: %s", itemsRead, err.Error())
 	}
 
+	tasksGroup.Wait()
 	// Closing inputDone signals to the application that we've read everything and can now shut down.
 	close(inputDone)
 

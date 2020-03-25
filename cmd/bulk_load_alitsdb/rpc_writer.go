@@ -30,6 +30,8 @@ type RpcWriter struct {
 	pointsChan chan *alitsdb_serialization.MputRequest
 }
 
+var logcount = 0
+
 // WriteLineProtocol returns the latency in nanoseconds and any error received while sending the data over RPC,
 // or it returns a new error if the RPC response isn't as expected.
 func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization.MputRequest) (latencyNs int64, err error) {
@@ -41,11 +43,16 @@ func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization
 		for retries > 0 {
 			last := time.Now()
 			//TODO: send the write request
-			resp, err := client.client.Mput(context.Background(), req)
+			ctx, cel := context.WithTimeout(context.Background(), time.Second*120)
+			defer cel()
+			resp, err := client.client.Mput(ctx, req)
 			now := time.Now()
 			dur := now.Sub(last).Milliseconds()
-			if dur > 1000 {
-				log.Printf("Timeout request mput points(%d): %dms %s\n", len(req.Points), dur, client.url)
+			if dur > 4000 {
+				logcount++
+				if logcount % 1000 == 0 {
+					log.Printf("Timeout request mput points(%d): %dms %s\n", len(req.Points), dur, client.url)
+				}
 			}
 
 			if err == nil {

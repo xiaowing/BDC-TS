@@ -162,14 +162,17 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 	for {
 		var basePoint *alitsdb_serialization.MputRequest
 		timeout := false
+		tick := time.NewTicker(time.Second)
 
 		select {
 		case basePoint = <-w.pointsChan:
 			buff = append(buff, basePoint)
 			n++
-		case <-time.After(1 * time.Second):
+		case <-tick.C:
 			timeout = true
 		}
+
+		tick.Stop()
 
 		if n > 0 && (n >= batchSize || timeout) {
 
@@ -177,15 +180,13 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 			for {
 				req := requestPool.Get().(*alitsdb_serialization.MputRequest)
 				//req := new(alitsdb_serialization.MputRequest)
-				if len(req.Points) < len(buff) {
-					req.Points = make([]*alitsdb_serialization.MputPoint, len(buff))
-				}
+				req.Points = make([]*alitsdb_serialization.MputPoint, len(buff))
 				for i, p := range buff {
 					req.Points[i] = p.Points[0]
 					req.Fnames = p.Fnames
 				}
 				_, err = w.WriteLineProtocol(client, req)
-				//req.Reset()
+				req.Reset()
 				requestPool.Put(req)
 
 				for _, p := range buff {

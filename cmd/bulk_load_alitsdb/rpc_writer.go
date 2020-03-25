@@ -155,7 +155,6 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 	if client.init() != nil {
 		return
 	}
-	tick := time.Tick(time.Second)
 
 	buff := make([]*alitsdb_serialization.MputRequest, 0, batchSize)
 	var n int
@@ -168,7 +167,7 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 		case basePoint = <-w.pointsChan:
 			buff = append(buff, basePoint)
 			n++
-		case <-tick:
+		case <-time.After(1 * time.Second):
 			timeout = true
 		}
 

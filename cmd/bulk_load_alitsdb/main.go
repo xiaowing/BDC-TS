@@ -385,14 +385,32 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 
 	recv := make(chan []byte, runtime.NumCPU() * 2)
 
+	var lock sync.Mutex
+	var Fnames []string
+
+
 	for i := 0; i < runtime.NumCPU() / 4; i++ {
 		go func() {
 			for byteBuff := range(recv) {
 				basePoint := pointPool.Get().(*alitsdb_serialization.MputRequest)
-
 				err = basePoint.Unmarshal(byteBuff[:size])
 				if err != nil {
 					log.Fatalf("cannot unmarshall %d item: %v\n", itemsRead, err)
+				}
+
+				if len(Fnames) == 0 {
+					lock.Lock()
+					if len(Fnames) == 0 {
+						str := make([]string, len(basePoint.Fnames))
+						for i, s := range(basePoint.Fnames) {
+							str[i] = s
+						}
+						Fnames = str
+					}
+					lock.Unlock()
+				} else {
+					/* gc can free Fnames quickly */
+					basePoint.Fnames = Fnames
 				}
 
 				writer := writers[int(basePoint.Points[0].Serieskey[len(basePoint.Points[0].Serieskey) - 1])%len(writers)]

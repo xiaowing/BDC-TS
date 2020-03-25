@@ -149,7 +149,7 @@ func init() {
 
 func startHttpServer() {
 	if err := http.ListenAndServe(":80", nil); err != nil {
-		log.Fatalf("HTTP Server Failed: %v", err)
+		fmt.Printf("HTTP Server Failed: %v\n", err)
 	}
 }
 
@@ -215,6 +215,7 @@ func main() {
 
 	for i := 0; i < workers; i++ {
 		writer := writers[i%len(daemonUrls)]
+		workersGroup.Add(1)
 		go writer.ProcessBatches(doLoad, &bufPool, &workersGroup, backoff, backingOffChan)
 	}
 
@@ -255,6 +256,11 @@ func main() {
 	<-inputDone
 	close(batchChan)
 	close(batchPointsChan)
+
+	/* close writers */
+	for _, w := range(writers) {
+		w.Close()
+	}
 
 	workersGroup.Wait()
 
@@ -482,6 +488,7 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 	}
 
 	tasksGroup.Wait()
+	close(recv)
 	// Closing inputDone signals to the application that we've read everything and can now shut down.
 	close(inputDone)
 

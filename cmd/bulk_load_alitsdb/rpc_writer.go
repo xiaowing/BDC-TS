@@ -26,6 +26,7 @@ var (
 type RpcWriter struct {
 	c          WriterConfig
 	url        string
+	close 	   bool
 	pointsChan chan *alitsdb_serialization.MputRequest
 }
 
@@ -91,11 +92,14 @@ func NewRPCWriter(c WriterConfig) LineProtocolWriter {
 	client.close()
 
 	writer.pointsChan = make(chan *alitsdb_serialization.MputRequest, batchSize*100)
+	writer.close = false
 
 	return writer
 }
 
-func (w *RpcWriter) close() {
+func (w *RpcWriter) Close() {
+	close(w.pointsChan)
+	w.close = true
 }
 
 func (w *RpcWriter) PutPoint(point *alitsdb_serialization.MputRequest) {
@@ -149,8 +153,6 @@ var requestPool = sync.Pool{
 
 // ProcessBatches read the data from input stream and write by batch
 func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.WaitGroup, backoff time.Duration, backingOffChan chan bool) {
-	defer w.close()
-
 	client := newClient(w.url)
 	if client.init() != nil {
 		return
@@ -166,8 +168,10 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 
 		select {
 		case basePoint = <-w.pointsChan:
-			buff = append(buff, basePoint)
-			n++
+			if basePoint != nil {
+				buff = append(buff, basePoint)
+				n++
+			}
 		case <-tick.C:
 			timeout = true
 		}
@@ -175,7 +179,6 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 		tick.Stop()
 
 		if n > 0 && (n >= batchSize || timeout) {
-
 			var err error
 			for {
 				req := requestPool.Get().(*alitsdb_serialization.MputRequest)
@@ -205,6 +208,10 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 			n = 0
 			buff = nil
 			buff = make([]*alitsdb_serialization.MputRequest, 0, batchSize)
+		}
+
+		if w.close {
+			break
 		}
 	}
 

@@ -4,6 +4,9 @@ import com.alibaba.tsdb.service.api.Alitsdb;
 import com.google.common.collect.AbstractIterator;
 import iot.tsdb.test.data.meta.DataSetMeta;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.text.DecimalFormat;
 import java.util.Map;
 import java.util.Random;
@@ -22,7 +25,7 @@ import static iot.tsdb.test.data.meta.DataConfiguration.getSystem;
 /**
  * timestamp,provice,city,system,mpid,cuserid...
  */
-public class DataGenerator extends AbstractIterator<String> {
+public class DataGenerator extends AbstractIterator<byte[]> {
     private DecimalFormat df = new DecimalFormat("0.00");
 
     private final Random random;
@@ -43,7 +46,7 @@ public class DataGenerator extends AbstractIterator<String> {
     }
 
     @Override
-    protected String computeNext() {
+    protected byte[] computeNext() {
         int userId = currentUserId();
         if (userId > meta.getEndUserId()) {
             return endOfData();
@@ -59,7 +62,8 @@ public class DataGenerator extends AbstractIterator<String> {
         if (aliTSDB) {
             return toAliPoint(metric, timestamp, userId, userType);
         } else {
-            return toLine(timestamp, userId, userType);
+            String line = toLine(timestamp, userId, userType) + "\n";
+            return line.getBytes(StandardCharsets.UTF_8);
         }
     }
 
@@ -117,7 +121,7 @@ public class DataGenerator extends AbstractIterator<String> {
         }
     }
 
-    private String toAliPoint(String metric, long timestamp, int cuserid, int userType) {
+    private byte[] toAliPoint(String metric, long timestamp, int cuserid, int userType) {
         // metric,tagK=tagV,t2=v2
         Map<String, String> tags = new TreeMap<>();
         tags.put("PROVINCE", getProvince(cuserid));
@@ -172,10 +176,16 @@ public class DataGenerator extends AbstractIterator<String> {
             double value = random.nextDouble() * 1000000;
             builder.addFvalues(Double.parseDouble(df.format(value)));
         }
-        return finalBuilder
-                .addPoints(builder.build())
-                .build()
-                .toByteString()
-                .toStringUtf8();
+        final Alitsdb.MputRequest build = finalBuilder.addPoints(builder.build()).build();
+        final byte[] dataBytes = build.toByteArray();
+        final long unsignedLong = Integer.toUnsignedLong(dataBytes.length/* + Long.BYTES*/);
+        ByteBuffer buffer = ByteBuffer.allocate((dataBytes.length + Long.BYTES) * 2)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .putLong(unsignedLong)
+                .put(dataBytes);
+        buffer.flip();
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(bytes);
+        return bytes;
     }
 }

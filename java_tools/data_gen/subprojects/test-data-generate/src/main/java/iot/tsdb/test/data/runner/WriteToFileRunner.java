@@ -1,7 +1,12 @@
 package iot.tsdb.test.data.runner;
 
-import java.io.BufferedWriter;
-import java.io.FileWriter;
+import iot.tsdb.test.data.generator.DataGenerator;
+import iot.tsdb.test.data.meta.DataSetMeta;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -10,11 +15,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-
-import iot.tsdb.test.data.generator.DataGenerator;
-import iot.tsdb.test.data.meta.DataSetMeta;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 
 @RequiredArgsConstructor
 @Slf4j
@@ -29,7 +29,7 @@ public class WriteToFileRunner implements Runnable {
     private final boolean aliTSDB;
     private final String metric;
 
-    private volatile BlockingQueue<List<String>> queue;
+    private volatile BlockingQueue<List<byte[]>> queue;
     private ExecutorService dataGenerateService;
 
     @Override
@@ -46,7 +46,7 @@ public class WriteToFileRunner implements Runnable {
 
     private void generateData() {
         DataGenerator generator = new DataGenerator(meta, seed, userType, aliTSDB, metric);
-        List<String> list = new ArrayList<>(batchSize);
+        List<byte[]> list = new ArrayList<>(batchSize);
         while (generator.hasNext()) {
             list.add(generator.next());
             if (list.size() == batchSize) {
@@ -64,16 +64,15 @@ public class WriteToFileRunner implements Runnable {
     }
 
     private void readAndWrite() {
-        List<String> list;
+        List<byte[]> list;
         int confirmEnd = 0;
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(fileName))){
+        try (FileOutputStream writer = new FileOutputStream(new File(fileName))) {
             while (true) {
                 try {
                     list = queue.poll(10, TimeUnit.MILLISECONDS);
-                    if (list != null ) {
-                        for (String line : list) {
+                    if (list != null) {
+                        for (byte[] line : list) {
                             writer.write(line);
-                            writer.newLine();
                         }
                     } else if (dataGenerateService.isTerminated()) {
                         confirmEnd++;

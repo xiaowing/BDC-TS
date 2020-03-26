@@ -36,6 +36,7 @@ import (
 var (
 	hosts          string
 	port           int
+	debug_port     int
 	useCase        string
 	daemonUrls     []string
 	workers        int
@@ -87,6 +88,7 @@ var (
 func init() {
 	flag.StringVar(&hosts, "hosts", "127.0.0.1", "AliTSDB hosts, comma-separated. Will be used in a round-robin fashion.")
 	flag.IntVar(&port, "port", 8242, "AliTSDB listening port")
+	flag.IntVar(&debug_port, "debug_port", 80, "debug listening port")
 	flag.StringVar(&useCase, "use-case", common.UseCaseChoices[3], fmt.Sprintf("Use case to model. (choices: %s)", strings.Join(common.UseCaseChoices, ", ")))
 	flag.IntVar(&batchSize, "batch-size", 1000, "Batch size (input lines).")
 	flag.IntVar(&workers, "workers", 1, "Number of parallel requests to make.")
@@ -148,8 +150,8 @@ func init() {
 }
 
 func startHttpServer() {
-	if err := http.ListenAndServe(":80", nil); err != nil {
-		//fmt.Printf("HTTP Server Failed: %v\n", err)
+	if err := http.ListenAndServe(fmt.Sprintf(":%d", debug_port), nil); err != nil {
+		fmt.Printf("HTTP Server Failed: %v\n", err)
 	}
 }
 

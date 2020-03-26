@@ -103,9 +103,9 @@ do
         echo $start_str
         if [ ${_FORMAT} = 'alitsdb' -o ${_FORMAT} = 'alitsdb-http' ]; then
             echo "$GOPATH/bin/bulk_data_gen --seed=123 --use-case=vehicle --scale-var=${_SCALE} --format=${_FORMAT} --timestamp-start=${start_str}  --timestamp-end=${end_str} > ${_OUTPUT}/${_FORMAT}_seed_123_${start_time}"
-            $GOPATH/bin/bulk_data_gen --seed=123 --use-case=vehicle --scale-var=${_SCALE} --format=${_FORMAT} --timestamp-start=${start_str}  --timestamp-end=${end_str} > ${_OUTPUT}/${_FORMAT}_seed_123_${start_time}
+            nohup $GOPATH/bin/bulk_data_gen --seed=123 --use-case=vehicle --scale-var=${_SCALE} --format=${_FORMAT} --timestamp-start=${start_str}  --timestamp-end=${end_str} > ${_OUTPUT}/${_FORMAT}_seed_123_${start_time} 2>>/tmp/gen_logs &
         else
             echo "$GOPATH/bin/bulk_data_gen --seed=123 --use-case=vehicle --scale-var=${_SCALE} --format=${_FORMAT}-bulk --timestamp-start=${start_str}  --timestamp-end=${end_str} > ${_OUTPUT}/${_FORMAT}_seed_123_${start_time}.txt"
-            $GOPATH/bin/bulk_data_gen --seed=123 --use-case=vehicle --scale-var=${_SCALE} --format=${_FORMAT}-bulk --timestamp-start=${start_str}  --timestamp-end=${end_str} > ${_OUTPUT}/${_FORMAT}_seed_123_${start_time}.txt 
-        fi 
+            nohup $GOPATH/bin/bulk_data_gen --seed=123 --use-case=vehicle --scale-var=${_SCALE} --format=${_FORMAT}-bulk --timestamp-start=${start_str}  --timestamp-end=${end_str} > ${_OUTPUT}/${_FORMAT}_seed_123_${start_time}.txt 2>>/tmp/gen_logs &
+        fi
 done   

@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	alitsdb_serialization "github.com/caict-benchmark/BDC-TS/alitsdb_serializaition"
@@ -26,8 +27,8 @@ var (
 type RpcWriter struct {
 	c          WriterConfig
 	url        string
-	close 	   bool
 	pointsChan chan *alitsdb_serialization.MputRequest
+	processes  int32
 }
 
 var logcount = 0
@@ -104,14 +105,15 @@ func NewRPCWriter(c WriterConfig) LineProtocolWriter {
 	client.close()
 
 	writer.pointsChan = make(chan *alitsdb_serialization.MputRequest, batchSize*100)
-	writer.close = false
 
 	return writer
 }
 
 func (w *RpcWriter) Close() {
-	close(w.pointsChan)
-	w.close = true
+	for i := 0; i < int(w.processes); i++ {
+		w.pointsChan <- nil
+	}
+	//close(w.pointsChan)
 }
 
 func (w *RpcWriter) PutPoint(point *alitsdb_serialization.MputRequest) {
@@ -163,8 +165,10 @@ var requestPool = sync.Pool{
 	},
 }
 
+var done_count = 0
 // ProcessBatches read the data from input stream and write by batch
 func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.WaitGroup, backoff time.Duration, backingOffChan chan bool) {
+	atomic.AddInt32(&w.processes, 1)
 	client := newClient(w.url)
 	if client.init() != nil {
 		return
@@ -172,25 +176,22 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 
 	buff := make([]*alitsdb_serialization.MputRequest, 0, batchSize)
 	var n int
+	var exit = false
 
 	for {
 		var basePoint *alitsdb_serialization.MputRequest
-		timeout := false
-		tick := time.NewTicker(time.Second)
-
 		select {
 		case basePoint = <-w.pointsChan:
 			if basePoint != nil {
 				buff = append(buff, basePoint)
 				n++
+				done_count++
+			} else {
+				exit = true
 			}
-		case <-tick.C:
-			timeout = true
 		}
 
-		tick.Stop()
-
-		if n > 0 && (n >= batchSize || timeout) {
+		if n > 0 && (n >= batchSize || exit) {
 			var err error
 			for {
 				req := requestPool.Get().(*alitsdb_serialization.MputRequest)
@@ -222,7 +223,7 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 			buff = make([]*alitsdb_serialization.MputRequest, 0, batchSize)
 		}
 
-		if w.close {
+		if exit {
 			break
 		}
 	}

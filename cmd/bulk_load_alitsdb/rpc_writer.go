@@ -49,7 +49,7 @@ func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization
 			dur := now.Sub(last).Milliseconds()
 			if dur > 4000 {
 				logcount++
-				if logcount % 1000 == 0 {
+				if logcount%1000 == 0 {
 					log.Printf("Timeout request mput points(%d): %dms %s\n", len(req.Points), dur, client.url)
 				}
 			}
@@ -162,6 +162,7 @@ var requestPool = sync.Pool{
 }
 
 var done_count = 0
+
 // ProcessBatches read the data from input stream and write by batch
 func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.WaitGroup, backoff time.Duration, backingOffChan chan bool) {
 	atomic.AddInt32(&w.processes, 1)

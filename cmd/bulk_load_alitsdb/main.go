@@ -45,6 +45,7 @@ var (
 	doLoad         bool
 	memprofile     bool
 	debug          bool
+	version        bool
 	cpuProfile     string
 	viaHTTP        bool
 	jsonFormat     bool
@@ -82,6 +83,8 @@ var (
 	closebracket = []byte("]")
 	commaspace   = []byte(", ")
 	newline      = []byte("\n")
+
+	currentVersion      = "alitsdb data load tools, version: 1.0.1"
 )
 
 // Parse args:
@@ -104,6 +107,7 @@ func init() {
 	flag.StringVar(&reportPassword, "report-password", "", "User password for Host to send result metrics")
 	flag.StringVar(&reportTagsCSV, "report-tags", "", "Comma separated k:v tags to send  alongside result metrics")
 	flag.BoolVar(&debug, "debug", false, "whether to print some debug information")
+	flag.BoolVar(&version, "v", false, "print client version.")
 	flag.Parse()
 
 	daemonUrls = strings.Split(hosts, ",")
@@ -155,7 +159,17 @@ func startHttpServer() {
 	}
 }
 
+func printVerison() {
+	fmt.Println(currentVersion)
+}
+
 func main() {
+
+	if version {
+		printVerison()
+		return
+	}
+
 	if cpuProfile != "" {
 		f, err := os.Create(cpuProfile)
 		if err != nil {
@@ -260,11 +274,6 @@ func main() {
 	<-inputDone
 	close(batchChan)
 	close(batchPointsChan)
-
-	/* close writers */
-	for _, w := range(writers) {
-		w.Close()
-	}
 
 	workersGroup.Wait()
 
@@ -395,15 +404,22 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 		},
 	}
 
-	recv := make(chan []byte, runtime.NumCPU() * 2)
+	decodeChan := make(chan []byte, runtime.NumCPU() * 2)
 
 	var lock sync.Mutex
 	var Fnames []string
 
+	var decodeGroup sync.WaitGroup
+	var decodeWorkerNum = runtime.NumCPU() / 4
 
-	for i := 0; i < runtime.NumCPU() / 4; i++ {
+	for i := 0; i < decodeWorkerNum; i++ {
+		decodeGroup.Add(1)
 		go func() {
-			for byteBuff := range(recv) {
+			defer decodeGroup.Done()
+			for byteBuff := range(decodeChan) {
+				if byteBuff == nil {
+					return
+				}
 				basePoint := pointPool.Get().(*alitsdb_serialization.MputRequest)
 				err = basePoint.Unmarshal(byteBuff[:size])
 				if err != nil {
@@ -472,7 +488,7 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 		}
 
 		tasksGroup.Add(1)
-		recv <- byteBuff
+		decodeChan <- byteBuff
 
 		count = count + 1
 		if count%100000 == 0 {
@@ -493,8 +509,19 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 		log.Fatalf("Error reading input after %d items: %s", itemsRead, err.Error())
 	}
 
+	/* force decode chan exit, and wait them done all tasks */
+
+	for i := 0; i < decodeWorkerNum; i++ {
+		decodeChan <- nil
+	}
+	decodeGroup.Wait()
+
+	/* close writers */
+	for _, w := range(writers) {
+		w.Close()
+	}
+
 	tasksGroup.Wait()
-	close(recv)
 	// Closing inputDone signals to the application that we've read everything and can now shut down.
 	close(inputDone)
 

@@ -36,8 +36,6 @@ var logcount = 0
 // WriteLineProtocol returns the latency in nanoseconds and any error received while sending the data over RPC,
 // or it returns a new error if the RPC response isn't as expected.
 func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization.MputRequest) (latencyNs int64, err error) {
-	start := time.Now()
-
 	if doLoad {
 		retries := MputAttemptsLimit
 
@@ -84,9 +82,7 @@ func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization
 		}
 	}
 
-	lat := time.Since(start).Nanoseconds()
-
-	return lat, err
+	return 0, err
 }
 
 // NewRPCWriter returns a new RPCWriter from the supplied WriterConfig.
@@ -187,6 +183,7 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 				n++
 				done_count++
 			} else {
+				lastWriteTime = time.Now()
 				exit = true
 			}
 		}
@@ -194,6 +191,10 @@ func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.Wai
 		if n > 0 && (n >= batchSize || exit) {
 			var err error
 			for {
+				startTimeOnce.Do(func() {
+					firstWriteTime = time.Now()
+				})
+
 				req := requestPool.Get().(*alitsdb_serialization.MputRequest)
 				//req := new(alitsdb_serialization.MputRequest)
 				req.Points = make([]*alitsdb_serialization.MputPoint, len(buff))

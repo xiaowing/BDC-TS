@@ -82,7 +82,7 @@ var (
 	commaspace   = []byte(", ")
 	newline      = []byte("\n")
 
-	currentVersion = "alitsdb data load tools, version: 1.0.0"
+	currentVersion = "alitsdb data load tools, version: 1.0.1"
 )
 
 // Parse args:

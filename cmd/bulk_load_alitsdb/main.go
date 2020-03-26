@@ -85,6 +85,9 @@ var (
 	newline      = []byte("\n")
 
 	currentVersion      = "alitsdb data load tools, version: 1.0.1"
+	startTimeOnce sync.Once
+	firstWriteTime time.Time
+	lastWriteTime  time.Time
 )
 
 // Parse args:
@@ -291,6 +294,7 @@ func main() {
 
 	end := time.Now()
 	took := end.Sub(start)
+	took = lastWriteTime.Sub(firstWriteTime)
 	itemrate := float64(itemsRead) / float64(took.Seconds())
 	valuerate := float64(valuesRead) / float64(took.Seconds())
 

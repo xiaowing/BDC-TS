@@ -15,6 +15,14 @@ import (
 	"github.com/caict-benchmark/BDC-TS/bulk_data_gen/common"
 )
 
+// program options
+var (
+	scene    string
+	filePath string
+)
+
+var sceneChoice = []string{"realtime", "history"}
+
 // TimeSlice is the wrapper of the time.Time slice for sorting
 type TimeSlice []time.Time
 
@@ -99,21 +107,41 @@ func getEarlyStartAndLateEnd(startTimes, endTimes TimeSlice, fileName string) (s
 }
 
 func main() {
-	var filePath string
+	flag.StringVar(&scene, "scene", sceneChoice[1], "The test secne (options:\"realtime\" or \"history\")")
 	flag.StringVar(&filePath, "filePath", "unknown", "Input result file path")
 	flag.Parse()
-	_, items, values, _, start, end, processes, workers, itemsRate, valueRate := filterLoadLog(filePath)
+	var isHistory bool
+
+	switch scene {
+	case sceneChoice[0]:
+		isHistory = false
+	case sceneChoice[1]:
+		isHistory = true
+	default:
+		panic(fmt.Sprintf("scene \"%s\" not supported", scene))
+	}
+
+	_, items, values, timeToken, start, end, processes, workers, itemsRate, valueRate := filterLoadLog(filePath)
 	startTimestamp := start.Format(common.DateTimeStdFormat)
 	endTimestamp := end.Format(common.DateTimeStdFormat)
 	fmt.Printf("Items written: %d\n", items)
 	fmt.Printf("Values written: %d\n", values)
-	fmt.Printf("Writing started at %s\n", startTimestamp)
-	fmt.Printf("Writing ended at %s\n", endTimestamp)
-	fmt.Printf("Overall time cost: %d secs\n", end.Sub(start)/time.Second)
-	fmt.Printf("Count of processes: %d\n", processes)
 	fmt.Printf("Workers (per-process): %d\n", workers)
-	fmt.Printf("Overall items rate: %f items/sec\n", float64(items)/float64(end.Sub(start)/time.Second))
-	fmt.Printf("Overall values rate: %f values/sec\n", float64(values)/float64(end.Sub(start)/time.Second))
-	fmt.Printf("Average items rate (per-process): %f items/sec\n", itemsRate)
-	fmt.Printf("Average values rate (per-process): %f values/sec\n", valueRate)
+	if isHistory {
+		fmt.Printf("Writing started at %s\n", startTimestamp)
+		fmt.Printf("Writing ended at %s\n", endTimestamp)
+		fmt.Printf("Overall time cost: %d secs\n", end.Sub(start)/time.Second)
+		fmt.Printf("Count of processes: %d\n", processes)
+		fmt.Printf("Overall items rate: %f items/sec\n", float64(items)/float64(end.Sub(start)/time.Second))
+		fmt.Printf("Overall values rate: %f values/sec\n", float64(values)/float64(end.Sub(start)/time.Second))
+		fmt.Printf("Average items rate (per-process): %f items/sec\n", itemsRate)
+		fmt.Printf("Average values rate (per-process): %f values/sec\n", valueRate)
+	} else {
+		fmt.Printf("Test started at %s\n", startTimestamp)
+		fmt.Printf("Test ended at %s\n", endTimestamp)
+
+		fmt.Printf("Time by all writer process taken: %f sec\n", timeToken)
+		fmt.Printf("Overall items rate: %f items/sec\n", float64(items)/timeToken)
+		fmt.Printf("Overall values rate: %f values/sec\n", float64(values)/timeToken)
+	}
 }

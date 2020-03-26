@@ -43,6 +43,7 @@ var (
 	doLoad         bool
 	memprofile     bool
 	debug          bool
+	version        bool
 	cpuProfile     string
 	viaHTTP        bool
 	jsonFormat     bool
@@ -80,6 +81,8 @@ var (
 	closebracket = []byte("]")
 	commaspace   = []byte(", ")
 	newline      = []byte("\n")
+
+	currentVersion      = "alitsdb data load tools, version: 1.0.0"
 )
 
 // Parse args:
@@ -102,6 +105,7 @@ func init() {
 	flag.StringVar(&reportPassword, "report-password", "", "User password for Host to send result metrics")
 	flag.StringVar(&reportTagsCSV, "report-tags", "", "Comma separated k:v tags to send  alongside result metrics")
 	flag.BoolVar(&debug, "debug", false, "whether to print some debug information")
+	flag.BoolVar(&version, "v", false, "print client version.")
 	flag.Parse()
 
 	daemonUrls = strings.Split(hosts, ",")
@@ -153,7 +157,17 @@ func startHttpServer() {
 	}
 }
 
+func printVerison() {
+	fmt.Println(currentVersion)
+}
+
 func main() {
+
+	if version {
+		printVerison()
+		return
+	}
+
 	if cpuProfile != "" {
 		f, err := os.Create(cpuProfile)
 		if err != nil {

@@ -104,6 +104,7 @@ rm -f ${_INPUT}/load_log
 debug_port=8000
 for file in ${_INPUT}/${_FORMAT}_seed_123_*
 do
+    echo ${file}
     echo "Loading data from ${file}" >> ${_INPUT}/load_log
     if [ ${_FORMAT} = 'alitsdb' -o ${_FORMAT} = 'alitsdb-http' ]; then
         if [ ${_FORMAT} = 'alitsdb' ]; then

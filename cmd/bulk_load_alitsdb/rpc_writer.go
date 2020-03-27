@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,10 +37,11 @@ var logcount = 0
 // WriteLineProtocol returns the latency in nanoseconds and any error received while sending the data over RPC,
 // or it returns a new error if the RPC response isn't as expected.
 func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization.MputRequest) (latencyNs int64, err error) {
-	if doLoad {
-		retries := MputAttemptsLimit
 
-		for retries > 0 {
+	if doLoad {
+		retries := 0
+
+		for {
 			last := time.Now()
 			//TODO: send the write request
 			ctx, cel := context.WithTimeout(context.Background(), time.Second*120)
@@ -49,7 +51,7 @@ func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization
 			dur := now.Sub(last).Milliseconds()
 			if dur > 4000 {
 				logcount++
-				if logcount % 1000 == 0 {
+				if logcount%1000 == 0 {
 					log.Printf("Timeout request mput points(%d): %dms %s\n", len(req.Points), dur, client.url)
 				}
 			}
@@ -61,25 +63,28 @@ func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization
 				// request succeeded so no need to retry
 				break
 			} else {
-				log.Printf("Error request mput interface(%d: %d): %s %s\n", len(req.Fnames), len(req.Points), client.url, err.Error())
-				retries--
+				log.Printf("Error request mput interface(%d: %d): %s tries: %d %s\n", len(req.Fnames),
+					len(req.Points), client.url, retries, err.Error())
+				retries++
+
+				s1 := rand.NewSource(time.Now().UnixNano())
+				r1 := rand.New(s1)
 
 				// wait a while
-				time.Sleep(time.Duration((MputAttemptsLimit-retries)*10) * time.Second)
+				time.Sleep(time.Duration(r1.Intn(10)) * time.Second)
 				// then start to retry
 				client.close()
 				if client.init() != nil {
 					/* init failed */
 					log.Println("[WARN] MultiFieldsPutServiceClient initialization failed")
-					retries = 0
 				}
 			}
 		}
 
 		// it means all attempts failed when the retries decreased to zero
-		if retries == 0 {
-			log.Fatalf("[Fatal]Error caused all retry attempts failed")
-		}
+		//if retries == 0 {
+		//	log.Fatalf("[Fatal]Error caused all retry attempts failed")
+		//}
 	}
 
 	return 0, err
@@ -162,6 +167,7 @@ var requestPool = sync.Pool{
 }
 
 var done_count = 0
+
 // ProcessBatches read the data from input stream and write by batch
 func (w *RpcWriter) ProcessBatches(doLoad bool, bufPool *sync.Pool, wg *sync.WaitGroup, backoff time.Duration, backingOffChan chan bool) {
 	atomic.AddInt32(&w.processes, 1)

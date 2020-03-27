@@ -104,7 +104,7 @@ rm -f ${_INPUT}/load_log
 debug_port=8000
 for file in ${_INPUT}/${_FORMAT}_seed_123_*
 do
-    echo ${file}
+    echo "Loading data from ${file}" >> ${_INPUT}/load_log
     if [ ${_FORMAT} = 'alitsdb' -o ${_FORMAT} = 'alitsdb-http' ]; then
         if [ ${_FORMAT} = 'alitsdb' ]; then
             cat ${file} | $GOPATH/bin/bulk_load_alitsdb -batch-size=${_BATCH_SIZE} --debug_port=${debug_port}  -workers=${_WORKERS} -hosts=${_HOSTS} -port=${_PORT} -do-load=$_DOLOAD -json-format=false -viahttp=false >> ${_INPUT}/load_log 2>&1 &

@@ -15,7 +15,8 @@ do
         --urls          other venders' database urls
         --hosts         alitsdb hosts
         --port          alitsdb listenning port
-        --do-load       whether to write the data to server actually"
+        --do-load       whether to write the data to server actually
+        --usecase       what kind of usecase data to write"
         exit
         ;;
     --input)
@@ -52,6 +53,10 @@ do
         ;;
     --do-load)
         _DOLOAD=$2
+        shift
+        ;;
+    --usecase)
+        _USECASE=$2
         shift
         ;;
     *)
@@ -100,6 +105,10 @@ if [[ -z "$_DOLOAD" ]]; then
     _DOLOAD="true"
 fi
 
+if [[ -z "$_USECASE" ]]; then
+    _USECASE="vehicle"
+fi
+
 rm -f ${_INPUT}/load_log
 debug_port=8000
 for file in ${_INPUT}/${_FORMAT}_seed_123_*
@@ -108,12 +117,12 @@ do
     echo "Loading data from ${file}" >> ${_INPUT}/load_log
     if [ ${_FORMAT} = 'alitsdb' -o ${_FORMAT} = 'alitsdb-http' ]; then
         if [ ${_FORMAT} = 'alitsdb' ]; then
-            cat ${file} | $GOPATH/bin/bulk_load_alitsdb -batch-size=${_BATCH_SIZE} --debug_port=${debug_port}  -workers=${_WORKERS} -hosts=${_HOSTS} -port=${_PORT} -do-load=$_DOLOAD -json-format=false -viahttp=false >> ${_INPUT}/load_log 2>&1 &
+            cat ${file} | $GOPATH/bin/bulk_load_alitsdb -batch-size=${_BATCH_SIZE} --debug_port=${debug_port}  -workers=${_WORKERS} -hosts=${_HOSTS} -port=${_PORT} -do-load=$_DOLOAD -use-case=$_USECASE -json-format=false -viahttp=false >> ${_INPUT}/load_log 2>&1 &
         else
-            cat ${file} | $GOPATH/bin/bulk_load_alitsdb -batch-size=${_BATCH_SIZE} --debug_port=${debug_port} -workers=${_WORKERS} -hosts=${_HOSTS} -port=${_PORT} -do-load=$_DOLOAD -json-format=true -viahttp=true >> ${_INPUT}/load_log 2>&1 &
+            cat ${file} | $GOPATH/bin/bulk_load_alitsdb -batch-size=${_BATCH_SIZE} --debug_port=${debug_port} -workers=${_WORKERS} -hosts=${_HOSTS} -port=${_PORT} -do-load=$_DOLOAD -use-case=$_USECASE -json-format=true -viahttp=true >> ${_INPUT}/load_log 2>&1 &
         fi
     else
-        cat ${file} | $GOPATH/bin/bulk_load_${_FORMAT} --batch-size=${_BATCH_SIZE} --debug_port=${debug_port} --workers=${_WORKERS} --urls=${_URLS} --do-db-create=false >> ${_INPUT}/load_log 2>&1 &
+        cat ${file} | $GOPATH/bin/bulk_load_${_FORMAT} --batch-size=${_BATCH_SIZE} --debug_port=${debug_port} --workers=${_WORKERS} --urls=${_URLS} --do-db-create=false -use-case=$_USECASE >> ${_INPUT}/load_log 2>&1 &
     fi
 	debug_port=$(($debug_port+1))
     sleep ${_SLEEP}

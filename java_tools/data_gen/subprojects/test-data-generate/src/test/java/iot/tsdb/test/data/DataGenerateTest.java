@@ -12,7 +12,7 @@ public class DataGenerateTest {
     @Test
     public void testLowVoltage() {
         DataSetMeta meta = new DataSetMeta.DataSet1("aaa", 0, 10, 2, LocalDate.of(2018, 1, 1));
-        DataGenerator dataGenerator = new DataGenerator(meta, 0, 0);
+        DataGenerator dataGenerator = new DataGenerator(meta, 0, 0, false, "electric");
         while (dataGenerator.hasNext()) {
             System.out.println(dataGenerator.next());
         }
@@ -21,7 +21,7 @@ public class DataGenerateTest {
     @Test
     public void testMediumAndHighVoltage() {
         DataSetMeta meta = new DataSetMeta.DataSet1("bbb", 0, 10, 2, LocalDate.of(2018, 1, 1));
-        DataGenerator dataGenerator = new DataGenerator(meta, 0, 1);
+        DataGenerator dataGenerator = new DataGenerator(meta, 0, 1, false, "electric");
         while (dataGenerator.hasNext()) {
             System.out.println(dataGenerator.next());
         }
@@ -30,7 +30,7 @@ public class DataGenerateTest {
     @Test
     public void testFeeder() {
         DataSetMeta meta = new DataSetMeta.DataSet2("ccc", 0, 10, 2, 1514736000000L, Duration.ofMinutes(15).toMillis());
-        DataGenerator dataGenerator = new DataGenerator(meta, 0, 0);
+        DataGenerator dataGenerator = new DataGenerator(meta, 0, 0, false, "electric");
         while (dataGenerator.hasNext()) {
             System.out.println(dataGenerator.next());
         }

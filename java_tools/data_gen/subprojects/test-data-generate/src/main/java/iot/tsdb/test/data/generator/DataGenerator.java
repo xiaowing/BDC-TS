@@ -8,9 +8,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.text.DecimalFormat;
-import java.util.Map;
 import java.util.Random;
-import java.util.TreeMap;
 
 import static iot.tsdb.test.data.meta.DataConfiguration.CSV_SPLITOR;
 import static iot.tsdb.test.data.meta.DataConfiguration.fields;
@@ -122,20 +120,16 @@ public class DataGenerator extends AbstractIterator<byte[]> {
     }
 
     private byte[] toAliPoint(String metric, long timestamp, int cuserid, int userType) {
-        // metric,tagK=tagV,t2=v2
-        Map<String, String> tags = new TreeMap<>();
-        tags.put("PROVINCE", getProvince(cuserid));
-        tags.put("DISTRICT", getDistrict(cuserid));
-        tags.put("SYSTEM", getSystem(cuserid));
-        tags.put("MPID", getMpid(cuserid));
-        tags.put("CUSID", cuserid + "");
-        tags.put("BJLX", getBjlx(cuserid, userType));
-        tags.put("LINE", getLine(cuserid));
-        tags.put("AREA", getArea(cuserid));
-        StringBuilder sb = new StringBuilder(metric);
-        for (Map.Entry<String, String> entry : tags.entrySet()) {
-            sb.append(",").append(entry.getKey()).append("=").append(entry.getValue());
-        }
+        // electric,AREA=area_0,BJLX=3,DISTRICT=zhuhai,LINE=line_0,MPID=00000,PROVINCE=gd,SYSTEM=TMR,ZCUSID=0
+        String sb = metric +
+                "," + "AREA" + "=" + getArea(cuserid) +
+                "," + "BJLX" + "=" + getBjlx(cuserid, userType) +
+                "," + "DISTRICT" + "=" + getDistrict(cuserid) +
+                "," + "LINE" + "=" + getLine(cuserid) +
+                "," + "MPID" + "=" + getMpid(cuserid) +
+                "," + "PROVINCE" + "=" + getProvince(cuserid) +
+                "," + "SYSTEM" + "=" + getSystem(cuserid) +
+                "," + "ZCUSID" + "=" + cuserid;
         // ----------------- MultifieldPoint ---------------
         // fields
 //        Map<String, Double> allFields = new HashMap<>();
@@ -170,7 +164,7 @@ public class DataGenerator extends AbstractIterator<byte[]> {
         final Alitsdb.MputPoint.Builder builder = Alitsdb.MputPoint
                 .newBuilder()
                 .setTimestamp(timestamp)
-                .setSerieskey(sb.toString());
+                .setSerieskey(sb);
         for (String field : fields) {
             finalBuilder.addFnames(field);
             double value = random.nextDouble() * 1000000;

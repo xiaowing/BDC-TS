@@ -44,7 +44,7 @@ func (w *RpcWriter) WriteLineProtocol(client *Client, req *alitsdb_serialization
 		for {
 			last := time.Now()
 			//TODO: send the write request
-			ctx, cel := context.WithTimeout(context.Background(), time.Second*120)
+			ctx, cel := context.WithTimeout(context.Background(), time.Second*20)
 			defer cel()
 			resp, err := client.client.Mput(ctx, req)
 			now := time.Now()

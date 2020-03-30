@@ -169,7 +169,6 @@ func printVerison() {
 }
 
 func main() {
-
 	if version {
 		printVerison()
 		return
@@ -416,6 +415,7 @@ func scanBinaryfile(itemsPerBatch int) (int64, int64) {
 
 	var decodeGroup sync.WaitGroup
 	var decodeWorkerNum = runtime.NumCPU() / 4
+	decodeWorkerNum = 1
 
 	for i := 0; i < decodeWorkerNum; i++ {
 		decodeGroup.Add(1)
